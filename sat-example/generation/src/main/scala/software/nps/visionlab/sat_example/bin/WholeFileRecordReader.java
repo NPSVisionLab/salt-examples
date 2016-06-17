@@ -1,0 +1,206 @@
+package software.nps.visionlab.sat_example.bin;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.ContentSummary;
+import org.apache.hadoop.io.*;
+import org.apache.hadoop.hdfs.DFSInputStream;
+import org.apache.hadoop.hdfs.DFSInputStream.ReadStatistics;
+
+import org.apache.hadoop.mapreduce.InputSplit;
+import org.apache.hadoop.mapreduce.RecordReader;
+import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.mapreduce.lib.input.FileSplit;
+import org.apache.hadoop.yarn.webapp.hamlet.HamletSpec;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+
+
+
+/**
+ * Created by trbatcha on 3/10/16.
+ */
+public class WholeFileRecordReader extends RecordReader<String, ArrayWritable> {
+
+
+    public static enum PERF_COUNTER {
+        TOTAL_BYTES,
+        TOTAL_REMOTE,
+        TOTAL_LOCAL,
+        LOCAL_TIME,
+        REMOTE_TIME,
+        LOCAL_RATE,
+        REMOTE_RATE
+    }
+    private FileSplit fileSplit;
+    private Configuration conf;
+    private TaskAttemptContext context;
+    private ArrayWritable value = new ByteArrayArrayWritable();
+    private boolean processed = false;
+    private final static int MAX_BUFFER = 524288;
+    private final static long MAX_FILE_SIZE = 3000000000L;
+
+    @Override
+    public void initialize(InputSplit split, TaskAttemptContext context) throws IOException, InterruptedException{
+        this.fileSplit = (FileSplit) split;
+        this.conf = context.getConfiguration();
+        this.context = context;
+    }
+
+    @Override
+    public boolean nextKeyValue() throws IOException, InterruptedException {
+        if (!processed){
+            long llen = fileSplit.getLength();
+            if (llen > MAX_FILE_SIZE){
+                llen = MAX_FILE_SIZE;
+                System.out.println("Truncating file bigger than " + 
+                                    String.valueOf(MAX_FILE_SIZE));
+            }
+            long cnt = (llen + MAX_BUFFER -1) / MAX_BUFFER;
+            BytesWritable[] arr = new BytesWritable[(int)cnt];
+            byte[] barray = new byte[MAX_BUFFER];
+            Path file = fileSplit.getPath();
+            FileSystem fs = file.getFileSystem(conf);
+            FSDataInputStream in = null;
+            //FileInputStream in = null;
+            ReadStatistics rstats = null;
+
+            long total_rcnt = 0;
+            long total_lcnt = 0;
+            long total_total = 0;
+            long total_rtime = 0;
+            long total_ltime = 0;
+            long last_rcnt = 0;
+            long last_lcnt = 0;
+            long last_total = 0;
+            try {
+                if (fs.isFile(file) == false){
+                   processed = true;
+                   return false;
+                }
+                in = fs.open(file);
+                ContentSummary csum = fs.getContentSummary(file);
+                System.out.println("file size for file: " + file + " = "  + String.valueOf(csum.getLength()));
+
+                int i = 0;
+                long pos = 0;
+                while (i < cnt){
+                    long time1 = System.currentTimeMillis();
+                    int res;
+                    if (llen < MAX_BUFFER) {
+                        in.readFully(pos, barray, 0, (int)llen);
+                        res = (int)llen;
+                    }else {
+                        in.readFully(pos, barray, 0, MAX_BUFFER);
+                        res = MAX_BUFFER;
+                    }
+                    llen -= MAX_BUFFER;
+                    pos += MAX_BUFFER;
+                    long time2 = System.currentTimeMillis();
+                    InputStream wrappedStream = in.getWrappedStream();
+                    if (wrappedStream instanceof DFSInputStream) {
+                        DFSInputStream dfsIn = (DFSInputStream) wrappedStream;
+                        rstats = dfsIn.getReadStatistics();
+                    }
+                    BytesWritable bytes = new BytesWritable();
+                    if (rstats != null) {
+                        long rcnt = rstats.getRemoteBytesRead();
+                        long lcnt = rstats.getTotalLocalBytesRead();
+                        long total = rstats.getTotalBytesRead();
+                        long temp = rcnt - last_rcnt;
+                        last_rcnt = rcnt;
+                        rcnt = temp;
+                        temp = lcnt - last_lcnt;
+                        last_lcnt = lcnt;
+                        lcnt = temp;
+                        temp = total - last_total;
+                        last_total = total;
+                        total = temp;
+                        try {
+                            bytes.set(barray, 0, res);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        } catch (OutOfMemoryError e) {
+                            System.out.println("!!! Out of memory on file: " +
+                                               file);
+                            break;
+                        }
+                        arr[i++] = bytes;
+                        total_rcnt += rcnt;
+                        total_lcnt += lcnt;
+                        total_total += total;
+                        if (rcnt > 0 && lcnt == 0) {
+                            total_rtime += time2 - time1;
+                        } else if (lcnt > 0 && rcnt == 0) {
+                            total_ltime += time2 - time1;
+                        } else if (total > 0){
+                            // We have a read of both types so split time equal by byte ratio
+                            long ntime = time2 - time1;
+                            double lratio = lcnt / total;
+                            double rratio = rcnt / total;
+                            total_ltime += ntime * lratio;
+                            total_rtime += ntime * rratio;
+                        }
+                    }else {
+                        bytes.set(barray, 0, res);
+                        arr[i++] = bytes;
+                    }
+                }
+
+                //in = new FileInputStream(file.toString());
+                value.set((Writable[])arr);
+                // Lets get stats on the read
+                if (rstats != null){
+
+                    System.out.println("total bytes read " + String.valueOf(total_total));
+                    System.out.println("remote bytes read " + String.valueOf(total_rcnt));
+                    System.out.println("local bytes read " + String.valueOf(total_lcnt));
+                    System.out.println("time for reading remote bytes " + String.valueOf(total_rtime));
+                    System.out.println("time for reading local bytes " + String.valueOf(total_ltime));
+                    if (total_rtime > 0)
+                        System.out.println("remote rate " + String.valueOf(total_rcnt/ total_rtime));
+                    if (total_ltime > 0)
+                        System.out.println("local rate " + String.valueOf(total_lcnt /total_ltime));
+                    // write data to counters
+                    this.context.getCounter(PERF_COUNTER.TOTAL_BYTES).increment(total_total);
+                    this.context.getCounter(PERF_COUNTER.TOTAL_REMOTE).increment(total_rcnt);
+                    this.context.getCounter(PERF_COUNTER.TOTAL_LOCAL).increment(total_lcnt);
+                    this.context.getCounter(PERF_COUNTER.LOCAL_TIME).increment(total_ltime);
+                    this.context.getCounter(PERF_COUNTER.REMOTE_TIME).increment(total_rtime);
+
+                }
+            } finally {
+                IOUtils.closeStream(in);
+            }
+            processed = true;
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public String getCurrentKey() throws IOException, InterruptedException {
+        return fileSplit.getPath().getName();
+    }
+
+    @Override
+    public ArrayWritable getCurrentValue() throws IOException, InterruptedException {
+        return value;
+    }
+
+    @Override
+    public float getProgress() throws IOException {
+        return processed ? 1.0f : 0.0f;
+    }
+
+    @Override
+    public void close() throws IOException {
+
+    }
+}

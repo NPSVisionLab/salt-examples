@@ -1,0 +1,86 @@
+/**
+ * $ ./gradlew
+ * The default task will build the project and run the test suite inside
+ * your local spark environment (spark-submit must be on the PATH).
+ *
+ * A coverage report will be present at build/reports/scoverage/index.html
+ *
+ * TODO integrate https://github.com/kt3k/coveralls-gradle-plugin
+ */
+
+apply plugin: 'java'
+apply plugin: 'scala'
+apply plugin: 'maven'
+apply plugin: 'idea'
+
+group = 'nps.visionlalb'
+version = '0.0.0'
+
+project.ext {
+  scalaBinaryVersion = '2.10'
+  scalaVersion = '2.10.4'
+  sparkVersion = '1.6.1'
+  saltVersion = '3.0.0'
+}
+
+jar {
+  baseName = 'sat_example'
+  version =  version
+  dependsOn configurations.runtime
+  from {
+    (configurations.runtime - configurations.provided).collect {
+      it.isDirectory() ? it : zipTree(it)
+    }
+  } {
+    exclude "META-INF/*.SF"
+    exclude "META-INF/*.DSA"
+    exclude "META-INF/*.RSA"
+  }
+}
+
+sourceCompatibility = 1.7
+targetCompatibility = 1.7
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+configurations {
+    provided
+    compile.extendsFrom provided
+}
+
+dependencies {
+    compile files("../../../tools/lib/gdal.jar")
+    compile fileTree("../../../salt/build/libs")
+    compile "software.uncharted.salt:salt-core:${saltVersion}"
+
+    //scala
+    provided("org.scala-lang:scala-library:${scalaVersion}")
+
+    //spark
+    provided "org.apache.spark:spark-core_${scalaBinaryVersion}:${sparkVersion}"
+    provided "org.apache.spark:spark-sql_${scalaBinaryVersion}:${sparkVersion}"
+    provided "org.scala-lang:scala-library:$scalaBinaryVersion"
+
+    compile "com.databricks:spark-csv_2.10:1.2.0"
+}
+
+task wrapper(type: Wrapper) {
+    gradleVersion = '2.10'
+}
+
+task run(overwrite: true, type: Exec, dependsOn: [assemble]) {
+  executable = 'spark-submit'
+  args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib","/home/trbatcha/salt-examples/sat-example/generation/build/libs/sat_example-${version}.jar", "/user/trbatcha/myntf/blk_3", "/home/trbatcha/output"]
+}
+
+idea {
+    module {
+        inheritOutputDirs = false
+        outputDir = file("$buildDir/classes/main/")
+    }
+}
+
+defaultTasks 'run'
