@@ -71,7 +71,7 @@ task wrapper(type: Wrapper) {
 
 task run(overwrite: true, type: Exec, dependsOn: [assemble]) {
   executable = 'spark-submit'
-  args = ["--class","software.uncharted.salt.examples.png.Main","/opt/salt/build/libs/salt-png-example-${version}.jar", "/opt/data/taxi_one_day.csv", "/opt/output"]
+  args = ["--class","software.uncharted.salt.examples.png.Main","/home/trbatcha/salt-examples/png-example/generation/build/libs/salt-png-example-${version}.jar", "/home/trbatcha/data/taxi_micro.csv", "/home/trbatcha/salt/output"]
 }
 
 idea {
