@@ -2,6 +2,7 @@ package software.nps.visionlab.sat_example.bin
 
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkConf
+import org.apache.spark.SparkFiles
 import org.apache.spark.sql.SQLContext
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.StructType
@@ -25,9 +26,13 @@ import software.uncharted.salt.core.analytic.numeric._
 
 import java.io._
 import java.awt.geom.Point2D
+import java.awt.geom.Rectangle2D
 
 import scala.util.parsing.json.JSONObject
+import scala.collection.JavaConversions._
+import scala.collection.mutable.ArrayBuffer
 import org.gdal.gdal.Dataset
+
 
 
 object Main {
@@ -103,9 +108,11 @@ object Main {
             }
         }
     }
+    val detectorScript = "/home/trbatcha/salt-examples/sat-example/doDetect.py"
+    sc.addFile(detectorScript)
     val resData = sc.newAPIHadoopRDD(hjob.getConfiguration(),
                   classOf[WholeFileInputFormat],
-                  classOf[String],classOf[ArrayWritable]).map(n => {
+                  classOf[String],classOf[ArrayWritable]).flatMap(n => {
                     val fname = n._1
                     println(fname)
                     var data = n._2
@@ -135,19 +142,43 @@ object Main {
                               new java.awt.geom.Point2D.Double(0.0, 0.0), 
                               new java.awt.geom.Point2D.Double(0.0, 0.0)) 
                     var props = None : Option[java.util.Properties]
+                    //var mres : collection.mutable.Seq[Row] = 
+                    //                       collection.mutable.Seq()
+                    var mres : ArrayBuffer[Row] = ArrayBuffer()
                     try {
-                        var gfoot = new GDALFootprint()
+                        var gfoot = new  GDALFootprint()
                         val npoints = gfoot.getCorners(nfile)
                         if (npoints != null)
                             points = npoints
                         props = Some(gfoot.getLastProps())
+                        val dscript = SparkFiles.get(detectorScript)
+                        val dir = SparkFiles.getRootDirectory()
+                        println("files dir: " + dir)
+                        val detects: 
+                         java.util.ArrayList[GDALFootprint.DetectionResult] = 
+                                    gfoot.getDetections(dir + "/doDetect.py")
+                        println("detects size " + String.valueOf(detects.size));
+                        for (i <- 0 until detects.size) {
+                            mres +=  Row(fname, detects.get(i).objName, 
+                                String.valueOf(detects.get(i).p0.getX()),
+                                String.valueOf(detects.get(i).p0.getY()),
+                                String.valueOf(detects.get(i).p1.getX()),
+                                String.valueOf(detects.get(i).p1.getY()),
+                                String.valueOf(detects.get(i).p2.getX()),
+                                String.valueOf(detects.get(i).p2.getY()),
+                                String.valueOf(detects.get(i).p3.getX()),
+                                String.valueOf(detects.get(i).p3.getY()))
+                       }
+                       gfoot.CloseDataset()
                     } catch {
                         case e: IllegalArgumentException => {}
                     } finally {
                         nfile.delete()
                     }
                     println(fname)
-                    Row(fname, String.valueOf(points(0).getX()), 
+                    println(mres(0)) 
+                    mres += Row(fname, "corner", 
+                               String.valueOf(points(0).getX()), 
                                String.valueOf(points(0).getY()),
                                String.valueOf(points(1).getX()), 
                                String.valueOf(points(1).getY()),
@@ -155,10 +186,14 @@ object Main {
                                String.valueOf(points(2).getY()),
                                String.valueOf(points(3).getX()), 
                                String.valueOf(points(3).getY()))
+                    println(mres(1)) 
+                   
+                    println("size of res " + String.valueOf(mres.length))
+                    mres
+                    }).persist()
                       
-                  }).persist()
 
-    val schemaString = "name x0x x0y x1x x1y x2x x2y x3x x3y"
+    val schemaString = "name type x0x x0y x1x x1y x2x x2y x3x x3y"
     val schema = StructType(
         schemaString.split(" ").map(fieldName => StructField(fieldName,
                                                             StringType, true)))
@@ -179,8 +214,9 @@ object Main {
     */
 
     // Construct an RDD of Rows containing only the fields we need. Cache the result
-    val input = sqlContext.sql("select cast(x0x as double), cast(x0y as double), cast(x1x as double), cast(x1y as double), cast(x2x as double), cast(x2y as double), cast(x3x as double), cast(x3y as double) from corners")
+    val input = sqlContext.sql("select cast(x0x as double), cast(x0y as double), cast(x1x as double), cast(x1y as double), cast(x2x as double), cast(x2y as double), cast(x3x as double), cast(x3y as double), type from corners")
       .rdd.cache()
+    // add where type='c' for only corners.
 
     // Given an input row, return pickup longitude, latitude as a tuple
     val pickupExtractor = (r: Row) => {
@@ -212,7 +248,13 @@ object Main {
       val pickups = new Series((tileSize - 1, tileSize - 1),
         pickupExtractor,
         new MercatorRectProjection(1024, level),
-        (r: Row) => Some(1),
+        (r: Row) => {
+               if (r.getString(8) == "corner"){
+                   Some(1)
+               }else {
+                   Some(1000)
+               }
+        },
         CountAggregator,
         Some(MinMaxAggregator))
 
@@ -228,6 +270,9 @@ object Main {
           (tile.coords, createByteBuffer(tile))
         })
         .collect()
+
+      // Remove old tiles
+      new File(outputPath + "/" + layerName).delete()
 
       // Save byte files to local filesystem
       output.foreach(tile => {

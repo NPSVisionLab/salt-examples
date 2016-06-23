@@ -28,15 +28,23 @@ import java.awt.image.DataBufferShort;
 import java.awt.image.Raster;
 import java.awt.image.SampleModel;
 import java.awt.image.WritableRaster;
+import java.awt.geom.Point2D;
 import java.io.File;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Enumeration;
 import java.util.Hashtable;
 import java.util.Vector;
+import java.util.ArrayList;
 import java.util.Properties;
+import java.util.StringTokenizer;
 import java.lang.IllegalArgumentException;
 import java.lang.RuntimeException;
+import java.lang.Process;
 
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
@@ -67,9 +75,28 @@ public class GDALFootprint
     public static final int GT_4_ROTATION_Y = 4;
     public static final int GT_5_PIXEL_HEIGHT = 5;
 
-    private Properties lastProps;
+    private Properties _lastProps;
+    private String _fileName;
+    private Dataset _poDataset;
+    private SpatialReference _srs = null;
 
-    public static java.awt.geom.Point2D[] computeCornersFromGeotransform(double[] gt, int width, int height){
+    public GDALFootprint() {
+        System.out.println("GDAL init...");
+        gdal.AllRegister();
+    }
+
+    public static class DetectionResult {
+        public String objName;
+        public int width;
+        public int height;
+        public java.awt.geom.Point2D p0;
+        public java.awt.geom.Point2D p1;
+        public java.awt.geom.Point2D p2;
+        public java.awt.geom.Point2D p3;
+    }
+
+    public static java.awt.geom.Point2D[] computeCornersFromGeotransform(
+                    double[] gt, int x, int y, int width, int height){
         if (null == gt || gt.length != GT_SIZE)
             return null;
 
@@ -79,10 +106,11 @@ public class GDALFootprint
 
         java.awt.geom.Point2D[] corners = new java.awt.geom.Point2D[4];
         int i = 0;
-        corners[i++] = getGeoPointForRasterPoint(gt, 0, height);
-        corners[i++] = getGeoPointForRasterPoint(gt, width, height);
-        corners[i++] = getGeoPointForRasterPoint(gt, width, 0);
-        corners[i++] = getGeoPointForRasterPoint(gt, 0, 0);
+        corners[i++] = getGeoPointForRasterPoint(gt, x, y + height -1);
+        corners[i++] = getGeoPointForRasterPoint(gt, x + width -1 , 
+                                                     y + height -1);
+        corners[i++] = getGeoPointForRasterPoint(gt, x + width -1, y);
+        corners[i++] = getGeoPointForRasterPoint(gt, x, y);
 
         return corners;
     }
@@ -147,9 +175,10 @@ public class GDALFootprint
         return bbox;
     }
 
-
-public static java.awt.geom.Point2D[] getBoundingBox(SpatialReference srs, Dataset ds) throws IllegalArgumentException {
-        java.awt.geom.Point2D[] bbox = null;
+    public static SpatialReference getSpatialReference(SpatialReference sp,
+                               Dataset ds) 
+                              throws IllegalArgumentException {
+        SpatialReference srs = sp;
         if (null == ds){
             String message = "Data Set is NULL";
             System.out.println(message);
@@ -171,33 +200,42 @@ public static java.awt.geom.Point2D[] getBoundingBox(SpatialReference srs, Datas
             System.out.println(message);
             throw new IllegalArgumentException(message);
         }
+        return srs;
+    }
+
+
+    public  java.awt.geom.Point2D[] getBoundingBox(SpatialReference sp, Dataset ds) throws IllegalArgumentException {
+        java.awt.geom.Point2D[] bbox = null;
+        SpatialReference srs;
+        if (_srs != null)
+            srs = _srs;
+        else{
+            srs = getSpatialReference(sp, ds);
+            _srs = srs;
+        }
         double[] gt = new double[6];
         ds.GetGeoTransform(gt);
-        java.awt.geom.Point2D[] corners = computeCornersFromGeotransform(gt, ds.getRasterXSize(), ds.getRasterYSize());
+        java.awt.geom.Point2D[] corners = computeCornersFromGeotransform(gt, 0,
+                                   0, ds.getRasterXSize(), ds.getRasterYSize());
         bbox = calcBoundingSector(srs, corners);
         return bbox;
     }
 
-    GDALFootprint() {
-        System.out.println("GDAL init...");
-        gdal.AllRegister();
-    }
-
     public Properties getLastProps() {
-        return lastProps;
+        return _lastProps;
     }
 
 
 
     public Dataset openFile(File f)
     {
-        Dataset poDataset = null;
+        _poDataset = null;
         try
         {
             System.out.println("trying to open " + f.getAbsolutePath());
-            poDataset = (Dataset) gdal.Open(f.getAbsolutePath(),
-                gdalconst.GA_ReadOnly);
-            if (poDataset == null)
+            _fileName = f.getAbsolutePath();
+            _poDataset = (Dataset) gdal.Open(_fileName, gdalconst.GA_ReadOnly);
+            if (_poDataset == null)
             {
                 System.out.println("The image could not be read.");
                 printLastError();
@@ -212,19 +250,19 @@ public static java.awt.geom.Point2D[] getBoundingBox(SpatialReference srs, Datas
             return null;
         }
         double[] adfGeoTransform = new double[6];
-        lastProps = new Properties();
-        lastProps.setProperty("name", f.getName());
+        _lastProps = new Properties();
+        _lastProps.setProperty("name", f.getName());
 
-        int width = poDataset.getRasterXSize();
-        int height = poDataset.getRasterXSize();
+        int width = _poDataset.getRasterXSize();
+        int height = _poDataset.getRasterXSize();
 
-        String projRef = poDataset.GetProjectionRef();
+        String projRef = _poDataset.GetProjectionRef();
 
-        if (poDataset.GetProjectionRef() != null)
-            System.out.println("Projection is `" + poDataset.GetProjectionRef()
+        if (_poDataset.GetProjectionRef() != null)
+            System.out.println("Projection is `" + _poDataset.GetProjectionRef()
                 + "'");
 
-        Hashtable dict = poDataset.GetMetadata_Dict("");
+        Hashtable dict = _poDataset.GetMetadata_Dict("");
         Enumeration keys = dict.keys();
         System.out.println(dict.size() + " items of metadata found (via Hashtable dict):");
         while (keys.hasMoreElements())
@@ -233,7 +271,7 @@ public static java.awt.geom.Point2D[] getBoundingBox(SpatialReference srs, Datas
             System.out.println(" :" + key + ":==:" + dict.get(key) + ":");
         }
 
-        Vector list = poDataset.GetMetadata_List("");
+        Vector list = _poDataset.GetMetadata_List("");
         Enumeration enumerate = list.elements();
         System.out.println(list.size() + " items of metadata found (via Vector list):");
         while (enumerate.hasMoreElements())
@@ -244,22 +282,26 @@ public static java.awt.geom.Point2D[] getBoundingBox(SpatialReference srs, Datas
 
 
 
-        poDataset.GetGeoTransform(adfGeoTransform);
+        _poDataset.GetGeoTransform(adfGeoTransform);
         {
             System.out.println("Origin = (" + adfGeoTransform[0] + ", "
                 + adfGeoTransform[3] + ")");
 
             System.out.println("Pixel Size = (" + adfGeoTransform[1] + ", "
                 + adfGeoTransform[5] + ")");
-            lastProps.setProperty("xpixsize", String.valueOf(adfGeoTransform[1]));
-            lastProps.setProperty("ypixsize", String.valueOf(adfGeoTransform[5]));
+            _lastProps.setProperty("xpixsize", String.valueOf(adfGeoTransform[1]));
+            _lastProps.setProperty("ypixsize", String.valueOf(adfGeoTransform[5]));
         }
 
 
-        int bandCount = poDataset.getRasterCount();
-        lastProps.setProperty("bands", String.valueOf(bandCount));
+        int bandCount = _poDataset.getRasterCount();
+        _lastProps.setProperty("bands", String.valueOf(bandCount));
 
-        return poDataset;
+        return _poDataset;
+    }
+    public void CloseDataset() {
+        if (_poDataset != null)
+            _poDataset.delete();
     }
 
     public void printLastError()
@@ -269,149 +311,6 @@ public static java.awt.geom.Point2D[] getBoundingBox(SpatialReference srs, Datas
         System.out.println("Last error type: " + gdal.GetLastErrorType());
     }
 
-    public DataBuffer getDataBuffer(Dataset ds){
-        Band poBand = null;
-        double[] adfMinMax = new double[2];
-        Double[] max = new Double[1];
-        Double[] min = new Double[1];
-
-        int bandCount = ds.getRasterCount();
-        ByteBuffer[] bands = new ByteBuffer[bandCount];
-        int[] banks = new int[bandCount];
-        int[] offsets = new int[bandCount];
-
-        int xsize = 1024;//poDataset.getRasterXSize();
-        int ysize = 1024;//poDataset.getRasterYSize();
-        int pixels = xsize * ysize;
-        int buf_type = 0, buf_size = 0;
-
-        for (int band = 0; band < bandCount; band++)
-        {
-            /* Bands are not 0-base indexed, so we must add 1 */
-            poBand = ds.GetRasterBand(band + 1);
-
-            buf_type = poBand.getDataType();
-            buf_size = pixels * gdal.GetDataTypeSize(buf_type) / 8;
-
-            System.out.println(" Data Type = "
-                + gdal.GetDataTypeName(poBand.getDataType()));
-            System.out.println(" ColorInterp = "
-                + gdal.GetColorInterpretationName(poBand
-                .GetRasterColorInterpretation()));
-
-            System.out.println("Band size is: " + poBand.getXSize() + "x"
-                + poBand.getYSize());
-
-            poBand.GetMinimum(min);
-            poBand.GetMaximum(max);
-            if (min[0] != null || max[0] != null)
-            {
-                System.out.println("  Min=" + min[0] + " Max="
-                    + max[0]);
-            }
-            else
-            {
-                System.out.println("  No Min/Max values stored in raster.");
-            }
-
-            if (poBand.GetOverviewCount() > 0)
-            {
-                System.out.println("Band has " + poBand.GetOverviewCount()
-                    + " overviews.");
-            }
-
-            if (poBand.GetRasterColorTable() != null)
-            {
-                System.out.println("Band has a color table with "
-                    + poBand.GetRasterColorTable().GetCount() + " entries.");
-                for (int i = 0; i < poBand.GetRasterColorTable().GetCount(); i++)
-                {
-                    System.out.println(" " + i + ": " +
-                        poBand.GetRasterColorTable().GetColorEntry(i));
-                }
-            }
-
-            System.out.println("Allocating ByteBuffer of size: " + buf_size);
-
-            ByteBuffer data = ByteBuffer.allocateDirect(buf_size);
-            data.order(ByteOrder.nativeOrder());
-
-            int returnVal = 0;
-            try
-            {
-                returnVal = poBand.ReadRaster_Direct(0, 0, poBand.getXSize(),
-                    poBand.getYSize(), xsize, ysize,
-                    buf_type, data);
-            }
-            catch (Exception ex)
-            {
-                System.err.println("Could not read raster data.");
-                System.err.println(ex.getMessage());
-                ex.printStackTrace();
-                return null;
-            }
-            if (returnVal == gdalconstConstants.CE_None)
-            {
-                bands[band] = data;
-            }
-            else
-            {
-                printLastError();
-            }
-            banks[band] = band;
-            offsets[band] = 0;
-        }
-
-        DataBuffer imgBuffer = null;
-        SampleModel sampleModel = null;
-        int data_type = 0, buffer_type = 0;
-
-        if (buf_type == gdalconstConstants.GDT_Byte)
-        {
-            byte[][]bytes = new byte[bandCount][];
-            for (int i = 0; i < bandCount; i++)
-            {
-                bytes[i] = new byte[pixels];
-                bands[i].get(bytes[i]);
-            }
-            imgBuffer = new DataBufferByte(bytes, pixels);
-            buffer_type = DataBuffer.TYPE_BYTE;
-            sampleModel = new BandedSampleModel(buffer_type,
-                xsize, ysize, xsize, banks, offsets);
-            data_type = (poBand.GetRasterColorInterpretation() ==
-                gdalconstConstants.GCI_PaletteIndex) ?
-                BufferedImage.TYPE_BYTE_INDEXED : BufferedImage.TYPE_BYTE_GRAY;
-        }
-        else if (buf_type == gdalconstConstants.GDT_Int16)
-        {
-            short[][] shorts = new short[bandCount][];
-            for (int i = 0; i < bandCount; i++)
-            {
-                shorts[i] = new short[pixels];
-                bands[i].asShortBuffer().get(shorts[i]);
-            }
-            imgBuffer = new DataBufferShort(shorts, pixels);
-            buffer_type = DataBuffer.TYPE_USHORT;
-            sampleModel = new BandedSampleModel(buffer_type,
-                xsize, ysize, xsize, banks, offsets);
-            data_type = BufferedImage.TYPE_USHORT_GRAY;
-        }
-        else if (buf_type == gdalconstConstants.GDT_Int32)
-        {
-            int[][] ints = new int[bandCount][];
-            for (int i = 0; i < bandCount; i++)
-            {
-                ints[i] = new int[pixels];
-                bands[i].asIntBuffer().get(ints[i]);
-            }
-            imgBuffer = new DataBufferInt(ints, pixels);
-            buffer_type = DataBuffer.TYPE_INT;
-            sampleModel = new BandedSampleModel(buffer_type,
-                xsize, ysize, xsize, banks, offsets);
-            data_type = BufferedImage.TYPE_CUSTOM;
-        }
-        return imgBuffer;
-    }
 
     public java.awt.geom.Point2D[] getCorners(File f){
         java.awt.geom.Point2D[] points = null;
@@ -454,6 +353,94 @@ public static java.awt.geom.Point2D[] getBoundingBox(SpatialReference srs, Datas
             }
         }
         return points;
+    }
+
+    public ArrayList<DetectionResult> getDetections(
+                                      String detectorScript) throws
+                                      InterruptedException, IOException{
+        System.out.println("script " + detectorScript);
+        ArrayList<DetectionResult> res = new ArrayList<DetectionResult>();
+        if (new File(detectorScript).exists() == false){
+            System.out.println("Detector script " + detectorScript + " does not exist!!!");
+            return res;
+        }
+        if (new File("/usr/bin/python").exists() == false){
+            System.out.println("/usr/bin/python does not exist!!!");
+            return res;
+        }
+        ArrayList<String> args = new ArrayList<String>();
+        args.add("/usr/bin/python");
+        args.add(detectorScript);
+        args.add(_fileName);
+        ProcessBuilder pb = new ProcessBuilder(args);
+        Process process = pb.start();
+        int errCode = process.waitFor();
+        if (errCode != 0) {
+            System.out.println("Could not execute detection script!!");
+            System.out.println("Error code: " + String.valueOf(errCode));
+            return res;
+        }
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new InputStreamReader(
+                                 process.getInputStream()));
+            String line = null;
+            // Input steam should be objname  x y w h
+            // The x,y,w,h are in image pixel coordinates we
+            // need to convert to lat lon
+            String objName;
+            while ((line = br.readLine()) != null) {
+                System.out.println("reading next line from input stream");
+                System.out.println(line);
+                StringTokenizer tok = new StringTokenizer(line);
+                DetectionResult dres = new DetectionResult();
+                dres.objName = (String)tok.nextElement();
+                System.out.println("objname " + dres.objName);
+                dres.p0 = new Point2D.Double(
+                                  Integer.valueOf((String)tok.nextElement()),
+                                  Integer.valueOf((String)tok.nextElement()));
+                dres.width = Integer.valueOf((String)tok.nextElement());
+                dres.height = Integer.valueOf((String)tok.nextElement());
+                System.out.println("adding to res " + String.valueOf(dres.width));
+                res.add(dres);
+            }
+        } finally {
+            br.close();
+        }
+        // Now convert the points to lan lon
+        int i;
+        SpatialReference srs;
+        if (_srs == null){
+            srs = getSpatialReference(null, _poDataset);
+            _srs = srs;
+        }else
+            srs = _srs;
+        double[] gt = new double[6];
+        _poDataset.GetGeoTransform(gt);
+        for (i = 0; i < res.size(); i++) {
+            java.awt.geom.Point2D[] corners = 
+              computeCornersFromGeotransform(gt, (int)res.get(i).p0.getX(),
+               (int)res.get(i).p0.getY(), res.get(i).width, res.get(i).height);
+            java.awt.geom.Point2D[] bbox = calcBoundingSector(srs, corners);
+            DetectionResult dres = res.get(i);
+            System.out.println("box " + 
+                               String.valueOf(bbox[0].getX()) + "," +
+                               String.valueOf(bbox[0].getY()) + "," +
+                               String.valueOf(bbox[1].getX()) + "," +
+                               String.valueOf(bbox[1].getY()) + "," +
+                               String.valueOf(bbox[2].getX()) + "," +
+                               String.valueOf(bbox[2].getY()) + "," +
+                               String.valueOf(bbox[2].getX()) + "," +
+                               String.valueOf(bbox[2].getY()));
+            dres.p0 = bbox[0];
+            dres.p1 = bbox[1];
+            dres.p2 = bbox[2];
+            dres.p3 = bbox[3];
+            res.set(i,dres);
+        }
+        System.out.println("java returning res");
+        System.out.println(String.valueOf(res.get(0).p0.getX()));
+        return res;
     }
 
     /** @param args  */
