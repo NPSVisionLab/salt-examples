@@ -371,8 +371,14 @@ public class GDALFootprint
         ArrayList<String> args = new ArrayList<String>();
         args.add("/usr/bin/python");
         args.add(detectorScript);
+        args.add("--cpu");
         args.add(_fileName);
         ProcessBuilder pb = new ProcessBuilder(args);
+        pb.environment().put("LD_LIBRARY_PATH",
+        "/usr/lib:/usr/lib64:/usr/lib64/atlas:/home/trbatcha/tools/lib:/home/trbatcha/tools/usr/lib64:/home/trbatcha/tools/usr/lib64/atlas:/home/trbatcha/tools/usr/lib:/home/trbatcha/gflags-2.1.1/build/lib:/home/trbatcha/liblmdb:/home/trbatcha/leveldb-master:/home/trbatcha/usr/lib:/home/trbatcha/tools/opencv/lib:/usr/lib64:/home/trbatcha/work/py-faster-rcnn/caffe-fast-rcnn/.build_release/lib");
+        pb.environment().put("PYTHONPATH",
+        "/home/trbatcha/work/py-faster-rcnn/lib:/home/trbatcha/work/py-faster-rcnn/caffe-fast-rcnn/python:$PYTHONPATH");
+
         Process process = pb.start();
         int errCode = process.waitFor();
         if (errCode != 0) {
