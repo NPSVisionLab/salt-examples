@@ -16,6 +16,9 @@ import org.apache.hadoop.io.BytesWritable
 import org.apache.hadoop.io.NullWritable
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 import org.apache.hadoop.mapreduce.Job
+import org.apache.commons.io.FileUtils
+import org.apache.commons.io.filefilter.SuffixFileFilter
+import org.apache.commons.io.filefilter.WildcardFileFilter
 
 import software.uncharted.salt.core.projection.numeric._
 import software.uncharted.salt.core.generation.request._
@@ -76,9 +79,15 @@ object Main {
     val inputPathName = args(0)
     val outputPath = args(1)
 
+    println("Removing old tiles " + outputPath + "/" + layerName)
+    var layerPath = new File(outputPath + "/" + layerName)
+    FileUtils.deleteDirectory(layerPath)
+    layerPath.mkdirs()
+
     val conf = new SparkConf().setAppName("salt-bin-example")
     conf.set("spark.kryoserializer.buffer.max", "1000MB")
-    conf.set("spark.executor.memory", "7GB")
+    conf.set("spark.executor.memory", "6GB")
+    conf.set("spark.driver.maxResultSize", "6GB")
     conf.set("spark.executor.extraLibraryPath", "/home/trbatcha/tools/lib")
     conf.set("spark.executor.extrajavaoptions", "-XX:+UseConcMarkSweepGC")
     conf.set("log4j.logger.org.apache.spark.rpc.akka.ErrorMonitor", "FATAL")
@@ -96,20 +105,48 @@ object Main {
         println("Processing " + inputPathName)
     }
     FileInputFormat.setInputPaths(hjob, inputPath)
-    val files = fs.listFiles(inputPath, true)
-    while (files.hasNext()) {
-        val next = files.next()
-        println("next " + next.getPath().getName())
-        if (next.isFile()){
-            val name = next.getPath().getName()
-            val ext  = name.split(',').drop(1).lastOption
-            if (ext == "ntf" || ext == "tif") {
-                FileInputFormat.addInputPath(hjob, next.getPath())
+    var remoteIter = fs.listFiles(inputPath, true)
+    //debug
+    var count = 0
+    var max_count = 200
+    var done = false
+    while (remoteIter.hasNext() && done == false) {
+        if (count > max_count && max_count > 0)
+            done = true
+        else {
+            var f = remoteIter.next()
+            println("next " + f.getPath().toString())
+            if (f.isFile()){
+                val name = f.getPath().getName()
+                val ext = name.split('.').drop(1).lastOption
+                ext.map(_.toLowerCase)
+                if (ext == Some("ntf") || ext == Some("tif")) {
+                    count += 1
+                    println("adding file " + name)
+                    FileInputFormat.addInputPath(hjob, f.getPath())
+                }
             }
         }
     }
     val detectorScript = "/home/trbatcha/salt-examples/sat-example/doDetect.py"
     sc.addFile(detectorScript)
+    val modelfile = "/home/trbatcha/salt-examples/sat-example/mymodel.caffemodel"
+    sc.addFile(modelfile)
+    val protofile = "/home/trbatcha/salt-examples/sat-example/test_ships.prototxt"
+    sc.addFile(protofile)
+    val cfgfile = "/home/trbatcha/salt-examples/sat-example/faster_rcnn_end2end_ships.yml"
+    sc.addFile(cfgfile)
+    //Add all the python files from py-faster-rcnn
+    //FileUtils.listFiles(new File("/home/trbatcha/salt-examples/sat-example/lib"), 
+    //               Array("py"),true).foreach( f =>
+    //              {
+    //                 val fullPath = f.getPath()
+    //                val newPath = fullPath.replace(
+    //                  "/home/trbatcha/salt-examples/sat-example/", "")
+    //              println("copying " + newPath)
+    //             sc.addFile(newPath)
+    //        })
+
     val resData = sc.newAPIHadoopRDD(hjob.getConfiguration(),
                   classOf[WholeFileInputFormat],
                   classOf[String],classOf[ArrayWritable]).flatMap(n => {
@@ -136,6 +173,7 @@ object Main {
                     }
                     println("wrote temp file of size " + bcnt)
                     var nfile = new File(tname)
+                    var haveCorner = false
                     var points : Array[java.awt.geom.Point2D] = 
                         Array(new java.awt.geom.Point2D.Double(0.0, 0.0), 
                               new java.awt.geom.Point2D.Double(0.0, 0.0), 
@@ -146,38 +184,50 @@ object Main {
                     //                       collection.mutable.Seq()
                     var mres : ArrayBuffer[Row] = ArrayBuffer()
                     try {
-                        var gfoot = new  GDALFootprint()
-                        val npoints = gfoot.getCorners(nfile)
-                        if (npoints != null)
-                            points = npoints
-                        props = Some(gfoot.getLastProps())
-                        val dscript = SparkFiles.get(detectorScript)
-                        val dir = SparkFiles.getRootDirectory()
-                        println("files dir: " + dir)
-                        val detects: 
-                         java.util.ArrayList[GDALFootprint.DetectionResult] = 
-                                    gfoot.getDetections(dir + "/doDetect.py")
-                        println("detects size " + String.valueOf(detects.size));
-                        for (i <- 0 until detects.size) {
-                            mres +=  Row(fname, detects.get(i).objName, 
-                                String.valueOf(detects.get(i).p0.getX()),
-                                String.valueOf(detects.get(i).p0.getY()),
-                                String.valueOf(detects.get(i).p1.getX()),
-                                String.valueOf(detects.get(i).p1.getY()),
-                                String.valueOf(detects.get(i).p2.getX()),
-                                String.valueOf(detects.get(i).p2.getY()),
-                                String.valueOf(detects.get(i).p3.getX()),
-                                String.valueOf(detects.get(i).p3.getY()))
-                       }
-                       gfoot.CloseDataset()
+                        if (bcnt > 0) {
+                            var gfoot = new  GDALFootprint()
+                            val npoints = gfoot.getCorners(nfile)
+                            if (npoints != null) {
+                                haveCorner = true
+                                points = npoints
+                            }
+                            props = Some(gfoot.getLastProps())
+                            val dscript = SparkFiles.get(detectorScript)
+                            val mfile = SparkFiles.get(modelfile)
+                            val pfile = SparkFiles.get(protofile)
+                            val cfg = SparkFiles.get(cfgfile)
+                            val dir = SparkFiles.getRootDirectory()
+                            println("files dir: " + dir)
+                            val detects: 
+                             java.util.ArrayList
+                                     [GDALFootprint.DetectionResult] = 
+                                    gfoot.getDetections(dir + "/doDetect.py", 
+                                                 dir + "/mymodel.caffemodel",
+                                                 dir + "/test_ships.prototxt",
+                                                 dir + "/faster_rcnn_end2end_ships.yml")
+                            println("detects size " + String.valueOf(detects.size));
+                            for (i <- 0 until detects.size) {
+                                mres +=  Row(fname, detects.get(i).objName, 
+                                    String.valueOf(detects.get(i).p0.getX()),
+                                    String.valueOf(detects.get(i).p0.getY()),
+                                    String.valueOf(detects.get(i).p1.getX()),
+                                    String.valueOf(detects.get(i).p1.getY()),
+                                    String.valueOf(detects.get(i).p2.getX()),
+                                    String.valueOf(detects.get(i).p2.getY()),
+                                    String.valueOf(detects.get(i).p3.getX()),
+                                    String.valueOf(detects.get(i).p3.getY()))
+                            }
+                            gfoot.CloseDataset()
+                        }
                     } catch {
                         case e: IllegalArgumentException => {}
                     } finally {
                         nfile.delete()
                     }
                     println(fname)
-                    println(mres(0)) 
-                    mres += Row(fname, "corner", 
+                    //println(mres(0)) 
+                    if (haveCorner)
+                        mres += Row(fname, "corner", 
                                String.valueOf(points(0).getX()), 
                                String.valueOf(points(0).getY()),
                                String.valueOf(points(1).getX()), 
@@ -186,13 +236,14 @@ object Main {
                                String.valueOf(points(2).getY()),
                                String.valueOf(points(3).getX()), 
                                String.valueOf(points(3).getY()))
-                    println(mres(1)) 
+                    //println(mres(1)) 
                    
                     println("size of res " + String.valueOf(mres.length))
                     mres
                     }).persist()
                       
 
+    println("Creating Data Frame");
     val schemaString = "name type x0x x0y x1x x1y x2x x2y x3x x3y"
     val schema = StructType(
         schemaString.split(" ").map(fieldName => StructField(fieldName,
@@ -214,6 +265,7 @@ object Main {
     */
 
     // Construct an RDD of Rows containing only the fields we need. Cache the result
+    println("Selection sql data")
     val input = sqlContext.sql("select cast(x0x as double), cast(x0y as double), cast(x1x as double), cast(x1y as double), cast(x2x as double), cast(x2y as double), cast(x3x as double), cast(x3y as double), type from corners")
       .rdd.cache()
     // add where type='c' for only corners.
@@ -230,6 +282,7 @@ object Main {
       }
     }
 
+    println("Creating TileGenerator")
     // Tile Generator object, which houses the generation logic
     val gen = TileGenerator(sc)
 
@@ -261,7 +314,7 @@ object Main {
       // Create a request for all tiles on these levels, generate
       val request = new TileLevelRequest(level, (coord: (Int, Int, Int)) => coord._1)
       val rdd = gen.generate(input, pickups, request)
-
+      println("Generating tiles")
       // Translate RDD of Tiles to RDD of (coordinate,byte array), collect to master for serialization
       val output = rdd
         .map(s => pickups(s).get)
@@ -271,9 +324,8 @@ object Main {
         })
         .collect()
 
-      // Remove old tiles
-      new File(outputPath + "/" + layerName).delete()
 
+      println("Writting out new tiles")
       // Save byte files to local filesystem
       output.foreach(tile => {
         val coord = tile._1
@@ -288,6 +340,7 @@ object Main {
         output.close()
       })
 
+      println("Creating map for each level")
       // Create map from each level to min / max values.
       rdd
         .map(s => pickups(s).get)
@@ -305,6 +358,7 @@ object Main {
         .toMap
     })
 
+    println("Saving meta.json file")
     // Flatten array of maps into a single map
     val levelInfoJSON = JSONObject(levelMeta.reduce(_ ++ _)).toString()
     // Save level metadata to filesystem

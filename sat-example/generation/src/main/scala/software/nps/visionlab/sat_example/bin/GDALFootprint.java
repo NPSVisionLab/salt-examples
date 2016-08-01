@@ -36,6 +36,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.Enumeration;
 import java.util.Hashtable;
 import java.util.Vector;
@@ -45,6 +47,8 @@ import java.util.StringTokenizer;
 import java.lang.IllegalArgumentException;
 import java.lang.RuntimeException;
 import java.lang.Process;
+
+import org.apache.commons.io.FileUtils;
 
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
@@ -87,8 +91,8 @@ public class GDALFootprint
 
     public static class DetectionResult {
         public String objName;
-        public int width;
-        public int height;
+        public Double width;
+        public Double height;
         public java.awt.geom.Point2D p0;
         public java.awt.geom.Point2D p1;
         public java.awt.geom.Point2D p2;
@@ -356,9 +360,15 @@ public class GDALFootprint
     }
 
     public ArrayList<DetectionResult> getDetections(
-                                      String detectorScript) throws
+                                      String detectorScript,
+                                      String modelfile,
+                                      String prototxt,
+                                      String cfg) throws
                                       InterruptedException, IOException{
+        File detFile = new File(detectorScript);
+        String sparkDir = detFile.getParent();
         System.out.println("script " + detectorScript);
+        System.out.println("spark dir " + sparkDir);
         ArrayList<DetectionResult> res = new ArrayList<DetectionResult>();
         if (new File(detectorScript).exists() == false){
             System.out.println("Detector script " + detectorScript + " does not exist!!!");
@@ -368,29 +378,48 @@ public class GDALFootprint
             System.out.println("/usr/bin/python does not exist!!!");
             return res;
         }
+        if (new File("/home/trbatcha/work/py-faster-rcnn").exists())
+            System.out.println("py-faster-rcnn exists");
         ArrayList<String> args = new ArrayList<String>();
-        args.add("/usr/bin/python");
+        args.add("/home/trbatcha/tools/bin/python");
         args.add(detectorScript);
+        args.add("--split");
+        args.add("600");
         args.add("--cpu");
+        args.add("--model");
+        args.add(modelfile);
+        args.add("--proto");
+        args.add(prototxt);
+        args.add("--cfg");
+        args.add(cfg);
         args.add(_fileName);
         ProcessBuilder pb = new ProcessBuilder(args);
         pb.environment().put("LD_LIBRARY_PATH",
         "/usr/lib:/usr/lib64:/usr/lib64/atlas:/home/trbatcha/tools/lib:/home/trbatcha/tools/usr/lib64:/home/trbatcha/tools/usr/lib64/atlas:/home/trbatcha/tools/usr/lib:/home/trbatcha/gflags-2.1.1/build/lib:/home/trbatcha/liblmdb:/home/trbatcha/leveldb-master:/home/trbatcha/usr/lib:/home/trbatcha/tools/opencv/lib:/usr/lib64:/home/trbatcha/work/py-faster-rcnn/caffe-fast-rcnn/.build_release/lib");
-        pb.environment().put("PYTHONPATH",
-        "/home/trbatcha/work/py-faster-rcnn/lib:/home/trbatcha/work/py-faster-rcnn/caffe-fast-rcnn/python:$PYTHONPATH");
+        pb.environment().put("PYTHONPATH", sparkDir + ":$PYTHONPATH");
+        Path eggTempDir = Files.createTempDirectory(sparkDir);
+        pb.environment().put("PYTHON_EGG_CACHE", eggTempDir.toString());
+        //pb.redirectErrorStream(true);
 
+        //Process process = pb.inheritIO().start();
         Process process = pb.start();
         int errCode = process.waitFor();
+        FileUtils.deleteDirectory(new File(eggTempDir.toString()));
+
+        System.out.println("Detection Complete");
+        BufferedReader br = new BufferedReader(new InputStreamReader(process.getErrorStream()));
+        String line = null;
+        while ((line = br.readLine()) != null) {
+            System.out.println("syserr: " +line);
+        }
         if (errCode != 0) {
             System.out.println("Could not execute detection script!!");
             System.out.println("Error code: " + String.valueOf(errCode));
             return res;
         }
-        BufferedReader br = null;
         try {
             br = new BufferedReader(new InputStreamReader(
                                  process.getInputStream()));
-            String line = null;
             // Input steam should be objname  x y w h
             // The x,y,w,h are in image pixel coordinates we
             // need to convert to lat lon
@@ -403,13 +432,17 @@ public class GDALFootprint
                 dres.objName = (String)tok.nextElement();
                 System.out.println("objname " + dres.objName);
                 dres.p0 = new Point2D.Double(
-                                  Integer.valueOf((String)tok.nextElement()),
-                                  Integer.valueOf((String)tok.nextElement()));
-                dres.width = Integer.valueOf((String)tok.nextElement());
-                dres.height = Integer.valueOf((String)tok.nextElement());
+                                  Double.valueOf((String)tok.nextElement()),
+                                  Double.valueOf((String)tok.nextElement()));
+                dres.width = Double.valueOf((String)tok.nextElement());
+                dres.height = Double.valueOf((String)tok.nextElement());
                 System.out.println("adding to res " + String.valueOf(dres.width));
                 res.add(dres);
             }
+        } catch (Exception e) {
+            System.err.println("Parsing detection return exception caught.");
+            System.err.println(e.getMessage());
+
         } finally {
             br.close();
         }
@@ -426,7 +459,9 @@ public class GDALFootprint
         for (i = 0; i < res.size(); i++) {
             java.awt.geom.Point2D[] corners = 
               computeCornersFromGeotransform(gt, (int)res.get(i).p0.getX(),
-               (int)res.get(i).p0.getY(), res.get(i).width, res.get(i).height);
+               (int)res.get(i).p0.getY(), 
+               (int)Math.round(res.get(i).width), 
+               (int)Math.round(res.get(i).height));
             java.awt.geom.Point2D[] bbox = calcBoundingSector(srs, corners);
             DetectionResult dres = res.get(i);
             System.out.println("box " + 
@@ -445,7 +480,8 @@ public class GDALFootprint
             res.set(i,dres);
         }
         System.out.println("java returning res");
-        System.out.println(String.valueOf(res.get(0).p0.getX()));
+        if (res.size() > 0)
+            System.out.println(String.valueOf(res.get(0).p0.getX()));
         return res;
     }
 

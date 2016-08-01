@@ -44,7 +44,7 @@ public class WholeFileRecordReader extends RecordReader<String, ArrayWritable> {
     private ArrayWritable value = new ByteArrayArrayWritable();
     private boolean processed = false;
     private final static int MAX_BUFFER = 524288;
-    private final static long MAX_FILE_SIZE = 3000000000L;
+    private final static long MAX_FILE_SIZE = 1000000000L;
 
     @Override
     public void initialize(InputSplit split, TaskAttemptContext context) throws IOException, InterruptedException{
@@ -57,10 +57,15 @@ public class WholeFileRecordReader extends RecordReader<String, ArrayWritable> {
     public boolean nextKeyValue() throws IOException, InterruptedException {
         if (!processed){
             long llen = fileSplit.getLength();
+            System.out.println("Next file split is " + String.valueOf(llen));
             if (llen > MAX_FILE_SIZE){
                 llen = MAX_FILE_SIZE;
                 System.out.println("Truncating file bigger than " + 
                                     String.valueOf(MAX_FILE_SIZE));
+                BytesWritable[] empty = new BytesWritable[0];
+                value.set((Writable[])empty);
+                processed = true;
+                return true;
             }
             long cnt = (llen + MAX_BUFFER -1) / MAX_BUFFER;
             BytesWritable[] arr = new BytesWritable[(int)cnt];
@@ -175,6 +180,9 @@ public class WholeFileRecordReader extends RecordReader<String, ArrayWritable> {
                     this.context.getCounter(PERF_COUNTER.REMOTE_TIME).increment(total_rtime);
 
                 }
+            } catch (IOException e) {
+                System.out.println("IOException for file " + file.toString() +
+                               " Error: "+ e.getMessage()); 
             } finally {
                 IOUtils.closeStream(in);
             }
