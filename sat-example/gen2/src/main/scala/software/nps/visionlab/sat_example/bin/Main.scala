@@ -16,6 +16,7 @@ import org.apache.hadoop.io.BytesWritable
 import org.apache.hadoop.io.NullWritable
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 import org.apache.hadoop.mapreduce.Job
+import org.apache.hadoop.conf.Configuration
 import org.apache.commons.io.FileUtils
 import org.apache.commons.io.filefilter.SuffixFileFilter
 import org.apache.commons.io.filefilter.WildcardFileFilter
@@ -86,7 +87,7 @@ object Main {
 
     val conf = new SparkConf().setAppName("sat-example")
     conf.set("spark.kryoserializer.buffer.max", "1000MB")
-    conf.set("spark.executor.memory", "7GB")
+    conf.set("spark.executor.memory", "6GB")
     conf.set("spark.driver.maxResultSize", "6GB")
     conf.set("spark.executor.extraLibraryPath", "/home/trbatcha/tools/lib")
     conf.set("spark.executor.extrajavaoptions", "-XX:+UseConcMarkSweepGC")
@@ -150,64 +151,44 @@ object Main {
 
     val resData = sc.newAPIHadoopRDD(hjob.getConfiguration(),
                   classOf[WholeFileInputFormat],
-                  classOf[String],classOf[ArrayWritable]).flatMap(n => {
+                  classOf[String],classOf[BytesWritable]).flatMap(n => {
                     val fname = n._1
                     println(fname)
-                    var data = n._2
-                    var bytes = data.get().asInstanceOf[Array[BytesWritable]]
-                    var out = None: Option[FileOutputStream]
+                    var data = n._2 // Data is not currently being used
+                    var mres : ArrayBuffer[Row] = ArrayBuffer()
                     val tname = "/dev/shm/" + fname
-                    var bcnt = 0
-                    try {
-                        out = Some(new FileOutputStream(tname))
-                        for (i <- 0 until bytes.length) {
-                            val next = bytes(i).copyBytes()
-                            bcnt += next.length
-                            out.get.write(next)
-                        }
-                    } catch {
-                        case e: IOException => e.printStackTrace
-                    } finally {
-                        if (out.isDefined)
-                            out.get.close
-                    }
-                    println("wrote temp file of size " + bcnt)
-                    var nfile = new File(tname)
+                    var nfile = new File(fname)
+
                     var haveCorner = false
                     var points : Array[java.awt.geom.Point2D] = 
-                        Array(new java.awt.geom.Point2D.Double(0.0, 0.0), 
-                              new java.awt.geom.Point2D.Double(0.0, 0.0), 
-                              new java.awt.geom.Point2D.Double(0.0, 0.0), 
-                              new java.awt.geom.Point2D.Double(0.0, 0.0)) 
+                            Array(new java.awt.geom.Point2D.Double(0.0, 0.0), 
+                                  new java.awt.geom.Point2D.Double(0.0, 0.0), 
+                                  new java.awt.geom.Point2D.Double(0.0, 0.0), 
+                                  new java.awt.geom.Point2D.Double(0.0, 0.0)) 
                     var props = None : Option[java.util.Properties]
-                    //var mres : collection.mutable.Seq[Row] = 
-                    //                       collection.mutable.Seq()
-                    var mres : ArrayBuffer[Row] = ArrayBuffer()
                     try {
-                        if (bcnt > 0) {
-                            var gfoot = new  GDALFootprint()
-                            val npoints = gfoot.getCorners(nfile)
-                            if (npoints != null) {
-                                haveCorner = true
-                                points = npoints
-                            }
-                            props = Some(gfoot.getLastProps())
-                            val dscript = SparkFiles.get(detectorScript)
-                            val mfile = SparkFiles.get(modelfile)
-                            val pfile = SparkFiles.get(protofile)
-                            val cfg = SparkFiles.get(cfgfile)
-                            val dir = SparkFiles.getRootDirectory()
-                            if (haveCorner) {
-                                val detects: 
-                                 java.util.ArrayList
-                                     [GDALFootprint.DetectionResult] = 
+                        var gfoot = new  GDALFootprint()
+                        val npoints = gfoot.getCorners(nfile)
+                        if (npoints != null) {
+                            haveCorner = true
+                            points = npoints
+                        }
+                        props = Some(gfoot.getLastProps())
+                        val dscript = SparkFiles.get(detectorScript)
+                        val mfile = SparkFiles.get(modelfile)
+                        val pfile = SparkFiles.get(protofile)
+                        val cfg = SparkFiles.get(cfgfile)
+                        val dir = SparkFiles.getRootDirectory()
+                        if (haveCorner) {
+                            val detects: java.util.ArrayList
+                             [GDALFootprint.DetectionResult] = 
                                     gfoot.getDetections(dir + "/doDetect.py", 
-                                                 dir + "/mymodel.caffemodel",
-                                                 dir + "/test_ships.prototxt",
-                                                 dir + "/faster_rcnn_end2end_ships.yml")
-                                println("detects size " + String.valueOf(detects.size));
-                                for (i <- 0 until detects.size) {
-                                    mres +=  Row(fname, detects.get(i).objName, 
+                                         dir + "/mymodel.caffemodel",
+                                         dir + "/test_ships.prototxt",
+                                         dir + "/faster_rcnn_end2end_ships.yml")
+                            println("detects size " + String.valueOf(detects.size));
+                            for (i <- 0 until detects.size) {
+                                mres +=  Row(fname, detects.get(i).objName, 
                                     String.valueOf(detects.get(i).p0.getX()),
                                     String.valueOf(detects.get(i).p0.getY()),
                                     String.valueOf(detects.get(i).p1.getX()),
@@ -215,11 +196,11 @@ object Main {
                                     String.valueOf(detects.get(i).p2.getX()),
                                     String.valueOf(detects.get(i).p2.getY()),
                                     String.valueOf(detects.get(i).p3.getX()),
-                                    String.valueOf(detects.get(i).p3.getY()))
-                                }
+                                    String.valueOf(detects.get(i).p3.getY()),
+                                    fname)
                             }
-                            gfoot.CloseDataset()
                         }
+                        gfoot.CloseDataset()
                     } catch {
                         case e: IllegalArgumentException => {}
                     } finally {
@@ -236,16 +217,17 @@ object Main {
                                String.valueOf(points(2).getX()), 
                                String.valueOf(points(2).getY()),
                                String.valueOf(points(3).getX()), 
-                               String.valueOf(points(3).getY()))
+                               String.valueOf(points(3).getY()),
+                               "")
                     //println(mres(1)) 
                    
                     println("size of res " + String.valueOf(mres.length))
                     mres
-                    }).persist()
+                }).persist()
                       
 
     println("Creating Data Frame");
-    val schemaString = "name type x0x x0y x1x x1y x2x x2y x3x x3y"
+    val schemaString = "name type x0x x0y x1x x1y x2x x2y x3x x3y fileName"
     val schema = StructType(
         schemaString.split(" ").map(fieldName => StructField(fieldName,
                                                             StringType, true)))
@@ -255,19 +237,9 @@ object Main {
     dFrame.registerTempTable("corners")
 
 
-    //val nameRDD = sc.binaryFiles("myntf/blk_3")
-
-    /*
-    sqlContext.read.format("com.databricks.spark.csv")
-      .option("header", "true")
-      .option("inferSchema", "true")
-      .load(s"file://$inputPath")
-      .registerTempTable("taxi_micro")
-    */
-
     // Construct an RDD of Rows containing only the fields we need. Cache the result
     println("Selection sql data")
-    val input = sqlContext.sql("select cast(x0x as double), cast(x0y as double), cast(x1x as double), cast(x1y as double), cast(x2x as double), cast(x2y as double), cast(x3x as double), cast(x3y as double), type from corners")
+    val input = sqlContext.sql("select cast(x0x as double), cast(x0y as double), cast(x1x as double), cast(x1y as double), cast(x2x as double), cast(x2y as double), cast(x3x as double), cast(x3y as double), fileName, type from corners")
       .rdd.cache()
     // add where type='c' for only corners.
 
@@ -279,7 +251,8 @@ object Main {
         None
       } else {
         Some((r.getDouble(0), r.getDouble(1), r.getDouble(2), r.getDouble(3),
-              r.getDouble(4), r.getDouble(5), r.getDouble(6), r.getDouble(7)))
+              r.getDouble(4), r.getDouble(5), r.getDouble(6), r.getDouble(7),
+              r.getString(8), r.getString(9)))
       }
     }
 
@@ -303,7 +276,7 @@ object Main {
         pickupExtractor,
         new MercatorRectProjection(1024, level),
         (r: Row) => {
-               if (r.getString(8) == "corner"){
+               if (r.getString(9) == "corner"){
                    Some(1)
                }else {
                    Some(1000)

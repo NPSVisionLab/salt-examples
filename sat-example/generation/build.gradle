@@ -73,10 +73,9 @@ task wrapper(type: Wrapper) {
 
 task run(overwrite: true, type: Exec, dependsOn: [assemble]) {
   executable = 'spark-submit'
-  //args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib", "--driver-memory", "8g", "--num-executors", "20", "--executor-cores", "24", "/home/trbatcha/salt-examples/sat-example/generation/build/libs/sat_example-${version}.jar", "/user/trbatcha/validSats", "/home/trbatcha/output"]
-  args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib", "--driver-memory", "8g", "--num-executors", "20", "/home/trbatcha/salt-examples/sat-example/generation/build/libs/sat_example-${version}.jar", "/user/trbatcha/validSats", "/home/trbatcha/output"]
- //args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib", "--driver-memory", "8g","/home/trbatcha/salt-examples/sat-example/generation/build/libs/sat_example-${version}.jar", 
-//"/user/trbatcha/badImage.ntf", "/home/trbatcha/output"]
+  //args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib:/home/trbatcha/tools/caffelib", "--driver-memory", "8g", "--num-executors", "20", "--executor-cores", "24", "/home/trbatcha/salt-examples/sat-example/generation/build/libs/sat_example-${version}.jar", "/user/trbatcha/validSats", "/home/trbatcha/output"]
+  args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib",  "--driver-memory", "8g",  "/home/trbatcha/salt-examples/sat-example/generation/build/libs/sat_example-${version}.jar", "/user/trbatcha/validSats", "/home/trbatcha/output"]
+ //args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib:/home/trbatcha/tools/caffelib", "--driver-memory", "8g","/home/trbatcha/salt-examples/sat-example/generation/build/libs/sat_example-${version}.jar", "/user/trbatcha/badImage.ntf", "/home/trbatcha/output"]
 
 
 }

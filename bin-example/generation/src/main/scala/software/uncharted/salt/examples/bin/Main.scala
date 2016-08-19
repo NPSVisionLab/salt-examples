@@ -48,9 +48,12 @@ object Main {
     val outputPath = args(1)
 
     val conf = new SparkConf().setAppName("salt-bin-example")
+    conf.set("spark.kryoserializer.buffer.max", "1000MB")
     val sc = new SparkContext(conf)
     val sqlContext = new SQLContext(sc)
 
+    //  .load(s"$inputPath/*.csv")
+    //  .load(s"file://$inputPath/*.csv")
     sqlContext.read.format("com.databricks.spark.csv")
       .option("header", "true")
       .option("inferSchema", "true")

@@ -13,8 +13,8 @@ apply plugin: 'scala'
 apply plugin: 'maven'
 apply plugin: 'idea'
 
-group = 'software.uncharted.salt'
-version = '3.0.0'
+group = 'nps.visionlalb'
+version = '0.0.0'
 
 project.ext {
   scalaBinaryVersion = '2.10'
@@ -24,7 +24,7 @@ project.ext {
 }
 
 jar {
-  baseName = 'salt-bin-example'
+  baseName = 'sat_example'
   version =  version
   dependsOn configurations.runtime
   from {
@@ -52,6 +52,8 @@ configurations {
 }
 
 dependencies {
+    compile files("../../../tools/lib/gdal.jar")
+    compile fileTree("../../../salt/build/libs")
     compile "software.uncharted.salt:salt-core:${saltVersion}"
 
     //scala
@@ -71,7 +73,11 @@ task wrapper(type: Wrapper) {
 
 task run(overwrite: true, type: Exec, dependsOn: [assemble]) {
   executable = 'spark-submit'
-  args = ["--class","software.uncharted.salt.examples.bin.Main", "/home/trbatcha/salt-examples/bin-example/generation/build/libs/salt-bin-example-${version}.jar", "/home/trbatcha/data/taxi_micro.csv", "/home/trbatcha/output"]
+  //args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib:/home/trbatcha/tools/caffelib", "--driver-memory", "8g", "--num-executors", "20", "--executor-cores", "24", "/home/trbatcha/salt-examples/sat-example/gen2/build/libs/sat_example-${version}.jar", "/user/trbatcha/validSats", "/home/trbatcha/output"]
+  args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib", "--driver-memory", "8g",  "/home/trbatcha/salt-examples/sat-example/gen2/build/libs/sat_example-${version}.jar", "/user/trbatcha/validSats", "/home/trbatcha/output"]
+ //args = ["--class","software.nps.visionlab.sat_example.bin.Main",  "--driver-library-path", "/home/trbatcha/tools/lib:/home/trbatcha/tools/caffelib", "--driver-memory", "8g","/home/trbatcha/salt-examples/sat-example/gen2/build/libs/sat_example-${version}.jar", "/user/trbatcha/badImage.ntf", "/home/trbatcha/output"]
+
+
 }
 
 idea {
