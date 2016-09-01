@@ -15,6 +15,7 @@ import org.apache.hadoop.io.ArrayWritable
 import org.apache.hadoop.io.BytesWritable
 import org.apache.hadoop.io.NullWritable
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import org.apache.hadoop.mapreduce.Job
 import org.apache.hadoop.conf.Configuration
 import org.apache.commons.io.FileUtils
@@ -31,6 +32,11 @@ import software.uncharted.salt.core.analytic.numeric._
 import java.io._
 import java.awt.geom.Point2D
 import java.awt.geom.Rectangle2D
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
+import java.util.Set
 
 import scala.util.parsing.json.JSONObject
 import scala.collection.JavaConversions._
@@ -39,6 +45,19 @@ import org.gdal.gdal.Dataset
 
 
 
+class MultiWriter(suffix: String) {
+    private val writers = scala.collection.mutable.Map[String, java.io.PrintWriter]()
+    def write(key: String, value: String) {
+        if (!writers.contains(key)) {
+            val f = new java.io.File("output/" + key + "/" +suffix)
+            f.getParentFile.mkdirs
+            writers(key) = new java.io.PrintWriter(f)
+        }
+        writers(key).println(value)
+    }
+    def close = writers.values.foreach(_.close)
+}
+
 object Main {
 
   // Defines the tile size in both x and y bin dimensions
@@ -46,6 +65,7 @@ object Main {
 
   // Defines the output layer name
   val layerName = "satData"
+  val imageLayerName = "iData"
 
   def printToFile(f: java.io.File)(op: java.io.PrintWriter => Unit) {
       val p = new java.io.PrintWriter(f)
@@ -82,8 +102,15 @@ object Main {
 
     println("Removing old tiles " + outputPath + "/" + layerName)
     var layerPath = new File(outputPath + "/" + layerName)
+    var imageLayerPath = new File(outputPath + "/" + imageLayerName)
     FileUtils.deleteDirectory(layerPath)
+    FileUtils.deleteDirectory(imageLayerPath)
     layerPath.mkdirs()
+    imageLayerPath.mkdirs()
+    val perms = PosixFilePermissions.fromString("rwxrwxrwx");
+    Files.setPosixFilePermissions(Paths.get(imageLayerPath.getAbsolutePath()), 
+                                   perms)
+
 
     val conf = new SparkConf().setAppName("sat-example")
     conf.set("spark.kryoserializer.buffer.max", "1000MB")
@@ -110,7 +137,7 @@ object Main {
     var remoteIter = fs.listFiles(inputPath, true)
     //debug
     var count = 0
-    var max_count = 10
+    var max_count = 2
     var done = false
     while (remoteIter.hasNext() && done == false) {
         if (count > max_count && max_count > 0)
@@ -132,6 +159,8 @@ object Main {
     }
     val detectorScript = "/home/trbatcha/salt-examples/sat-example/doDetect.py"
     sc.addFile(detectorScript)
+    val tileScript = "/home/trbatcha/salt-examples/sat-example/gdal2tiles.py"
+    sc.addFile(tileScript)
     val modelfile = "/home/trbatcha/salt-examples/sat-example/mymodel.caffemodel"
     sc.addFile(modelfile)
     val protofile = "/home/trbatcha/salt-examples/sat-example/test_ships.prototxt"
@@ -175,6 +204,7 @@ object Main {
                         }
                         props = Some(gfoot.getLastProps())
                         val dscript = SparkFiles.get(detectorScript)
+                        val tscript = SparkFiles.get(tileScript)
                         val mfile = SparkFiles.get(modelfile)
                         val pfile = SparkFiles.get(protofile)
                         val cfg = SparkFiles.get(cfgfile)
@@ -185,7 +215,8 @@ object Main {
                                     gfoot.getDetections(dir + "/doDetect.py", 
                                          dir + "/mymodel.caffemodel",
                                          dir + "/test_ships.prototxt",
-                                         dir + "/faster_rcnn_end2end_ships.yml")
+                                         dir + "/faster_rcnn_end2end_ships.yml",
+                                         imageLayerPath)
                             println("detects size " + String.valueOf(detects.size));
                             for (i <- 0 until detects.size) {
                                 mres +=  Row(fname, detects.get(i).objName, 
@@ -196,8 +227,8 @@ object Main {
                                     String.valueOf(detects.get(i).p2.getX()),
                                     String.valueOf(detects.get(i).p2.getY()),
                                     String.valueOf(detects.get(i).p3.getX()),
-                                    String.valueOf(detects.get(i).p3.getY()),
-                                    fname)
+                                    String.valueOf(detects.get(i).p3.getY())
+                                    )
                             }
                         }
                         gfoot.CloseDataset()
@@ -227,7 +258,7 @@ object Main {
                       
 
     println("Creating Data Frame");
-    val schemaString = "name type x0x x0y x1x x1y x2x x2y x3x x3y fileName"
+    val schemaString = "name type x0x x0y x1x x1y x2x x2y x3x x3y file"
     val schema = StructType(
         schemaString.split(" ").map(fieldName => StructField(fieldName,
                                                             StringType, true)))
@@ -239,7 +270,7 @@ object Main {
 
     // Construct an RDD of Rows containing only the fields we need. Cache the result
     println("Selection sql data")
-    val input = sqlContext.sql("select cast(x0x as double), cast(x0y as double), cast(x1x as double), cast(x1y as double), cast(x2x as double), cast(x2y as double), cast(x3x as double), cast(x3y as double), fileName, type from corners")
+    val input = sqlContext.sql("select cast(x0x as double), cast(x0y as double), cast(x1x as double), cast(x1y as double), cast(x2x as double), cast(x2y as double), cast(x3x as double), cast(x3y as double), type from corners")
       .rdd.cache()
     // add where type='c' for only corners.
 
@@ -252,7 +283,7 @@ object Main {
       } else {
         Some((r.getDouble(0), r.getDouble(1), r.getDouble(2), r.getDouble(3),
               r.getDouble(4), r.getDouble(5), r.getDouble(6), r.getDouble(7),
-              r.getString(8), r.getString(9)))
+              r.getString(8)))
       }
     }
 
@@ -276,7 +307,7 @@ object Main {
         pickupExtractor,
         new MercatorRectProjection(1024, level),
         (r: Row) => {
-               if (r.getString(9) == "corner"){
+               if (r.getString(8) == "corner"){
                    Some(1)
                }else {
                    Some(1000)

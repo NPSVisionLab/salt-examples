@@ -149,7 +149,7 @@ class MercatorRectProjection(
   max: (Double, Double) = (180, 85.05112878),
   tms: Boolean = true
 ) extends Projection[(Double, Double, Double, Double,
-                     Double, Double, Double, Double, String, String), 
+                     Double, Double, Double, Double, String), 
                      (Int, Int, Int), (Int, Int)] {
 
   private val mercatorProjection = new MercatorProjection(zoomLevels, min, max, tms)
@@ -197,6 +197,7 @@ class MercatorRectProjection(
     ((z, tileX, tileY), (binX, binY))
   }
  
+  /*
   def addImage( fname : String,
               dc0: (Double, Double), dc1: (Double, Double), 
               dc2: (Double, Double), dc3: (Double, Double), 
@@ -223,18 +224,9 @@ class MercatorRectProjection(
         val uc3 = tileBinIndexToUniversalBinIndex(tc3.get(i)._1, tc3.get(i)._2,
                    maxBin)
 
-          /*
-          result.appendAll(
-            endpointsToLine
-            .endpointsToLineBins(startUniversalBin, endUniversalBin)
-            .map(ub => {
-              //convert universal bin index back into tile coordinate and tile-relative bin index
-              universalBinIndexToTileIndex(zoomLevels(i), ub, maxBin)
-            })
-          )
-          */
      }
   }
+  */
 
   def addLine(startdc: (Double, Double), enddc: (Double, Double), 
               maxBin: (Int, Int), endpointsToLine : EndPointsToLine,
@@ -267,7 +259,7 @@ class MercatorRectProjection(
 
   override def project(
     dc: Option[(Double, Double, Double, Double,
-                Double, Double, Double, Double, String, String)],
+                Double, Double, Double, Double, String)],
     maxBin: (Int, Int)
   ): Option[Seq[((Int, Int, Int), (Int, Int))]] = {
 
@@ -283,13 +275,19 @@ class MercatorRectProjection(
       val pt2dc = (dc.get._3, dc.get._4)
       val pt3dc = (dc.get._5, dc.get._6)
       val pt4dc = (dc.get._7, dc.get._8)
-      val fname = dc.get._9
-      val rowType = dc.get._10
+      //val rowType = dc.get._9
       val result = new ArrayBuffer[((Int,  Int, Int), (Int, Int))]()
+      /*
       if (rowType != "corner")
           addImage(fname, pt1dc, pt2dc, pt3dc, pt4dc, maxBin, endpointsToLine, 
               result)
+      */
       addLine(pt1dc, pt2dc, maxBin, endpointsToLine, result)
+      /*
+      for (next <- result) {
+          println("line " + String.valueOf(next._1) + String.valueOf(next._2))
+      }
+      */
       addLine(pt2dc, pt3dc, maxBin, endpointsToLine, result)
       addLine(pt3dc, pt4dc, maxBin, endpointsToLine, result)
       addLine(pt4dc, pt1dc, maxBin, endpointsToLine, result)

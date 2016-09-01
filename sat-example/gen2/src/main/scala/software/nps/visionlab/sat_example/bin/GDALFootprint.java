@@ -363,7 +363,8 @@ public class GDALFootprint
                                       String detectorScript,
                                       String modelfile,
                                       String prototxt,
-                                      String cfg) throws
+                                      String cfg,
+                                      File imageLayerPath) throws
                                       InterruptedException, IOException{
         File detFile = new File(detectorScript);
         String sparkDir = detFile.getParent();
@@ -392,6 +393,8 @@ public class GDALFootprint
         args.add(prototxt);
         args.add("--cfg");
         args.add(cfg);
+        args.add("--tiles");
+        args.add(imageLayerPath.getAbsolutePath());
         args.add(_fileName);
         ProcessBuilder pb = new ProcessBuilder(args);
         pb.environment().put("LD_LIBRARY_PATH",
@@ -399,6 +402,7 @@ public class GDALFootprint
         pb.environment().put("PYTHONPATH", sparkDir + ":$PYTHONPATH");
         Path eggTempDir = Files.createTempDirectory(sparkDir);
         pb.environment().put("PYTHON_EGG_CACHE", eggTempDir.toString());
+        pb.environment().put("GDAL_DATA", "/home/trbatcha/gdal_data");
         //pb.redirectErrorStream(true);
 
         //Process process = pb.inheritIO().start();
@@ -418,6 +422,7 @@ public class GDALFootprint
             return res;
         }
         try {
+            System.out.println("Reading input stream");
             br = new BufferedReader(new InputStreamReader(
                                  process.getInputStream()));
             // Input steam should be objname  x y w h
