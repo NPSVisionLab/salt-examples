@@ -111,7 +111,7 @@ def demo(net, im_file):
            '{:d} object proposals').format(timer.total_time, boxes.shape[0])
 
     # Visualize detections for each class
-    CONF_THRESH = 0.6
+    CONF_THRESH = 0.5
     NMS_THRESH = 0.3
     res = []
     for cls_ind, cls in enumerate(CLASSES[1:]):
@@ -199,11 +199,10 @@ def split_up_file(fname, tempDir, splitSize, maxCnt):
             with timeout(6):
                 if bitSize == 16:
                     transStr = "/home/trbatcha/tools/bin/gdal_translate -of JPEG -ot Byte -scale 64 1024 0 255 -b 1 -srcwin " + str(xoff) + " " + str(yoff) + \
-                   " " + str(splitSize) + " " + str(splitSize) + " " + fname + " " + tempName
+                       " " + str(splitSize) + " " + str(splitSize) + " " + fname + " " + tempName
                 else:
                     transStr = "/home/trbatcha/tools/bin/gdal_translate -of JPEG -ot Byte -b 1 -srcwin " + str(xoff) + " " + str(yoff) + \
-                   " " + str(splitSize) + " " + str(splitSize) + " " + fname + " " + tempName
-
+                       " " + str(splitSize) + " " + str(splitSize) + " " + fname + " " + tempName
                 #result = subprocess.check_output([transStr], shell=True)
                 args = shlex.split(transStr)
                 p = Popen(args, stdout=PIPE, stderr=PIPE)
@@ -239,58 +238,6 @@ def doWriteToHDFS(dirname, fname) :
     print stderr
     return hname
 
-def mergeTiles(src, dst):
-    img1 = mpimg.imread(src)
-    img2 = mpimg.imread(dst)
-    img = np.maximum(img1, img2)
-    mpimg.imsave(dst, img)
-
-def moveTiles(src, dst):
-    files = os.listdir(src)
-    if not os.path.exists(dst):
-        os.makedirs(dst)
-        # chmod of dirs
-        for p,d,f in os.walk(dst):
-            os.chmod(p, 0o777)
-    for f in files:
-        sname = os.path.join(src, f)
-        dname = os.path.join(dst, f)
-        if os.path.isdir(sname):
-            moveTiles(sname, dname)
-        else:
-            fname, ext = os.path.splitext(dname)
-            # Currently only moving the tiles since the
-            # tilemapresource.xml is not being used by leaflet.
-            # TODO: merge the tilemapresource.xml files by
-            # reading the xml and updating the bounding box, and
-            # x,y of the tiles.
-            if os.path.exists(dname) == True and ext == '.png':
-                mergeTiles(sname, dname)
-
-                #i = 0;
-                #dname2 = dname + str(i)
-                #while os.path.exists(dname2) == True:
-                #    i += 1
-                #    dname2 = dname + str(i)
-                #shutil.move(sname, dname2)
-
-                #os.chmod(dname, 0o666)
-                pass
-            elif ext == '.png':
-                shutil.move(sname, dname)
-                os.chmod(dname, 0o666)
-
-def parseRectStr(rectStr):
-    items = rectStr.split(' ')
-    # the first item is the class which we will ignore
-    x = int(round(float(items[1])))
-    y = int(round(float(items[2])))
-    w = int(round(float(items[3])))
-    h = int(round(float(items[4])))
-    print("pared rect {0},{1},{2},{3}".format(x,y,w,h))
-    return x,y,w,h
-
-
 import signal, errno
 from contextlib import contextmanager
 
@@ -306,148 +253,6 @@ def timeout(seconds):
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, orig_handler)
-
-
-
-# 
-# We create the tile in a temp directory and then move it to its final
-# destination.
-#
-def writeTilesFromDetects(tileDir, detects, origFile):
-    if len(detects) == 0:
-        return
-    tempTileDir = tempfile.mkdtemp(dir='/home/trbatcha/tempDir')
-    outputDir = os.path.join(tempTileDir, "output")
-    if not os.path.exists(tempTileDir):
-        os.makedirs(tempTileDir)
-    if not os.path.exists(outputDir):
-        os.makedirs(outputDir)
-    vname = os.path.basename(origFile)
-    vPath = os.path.join(tempTileDir, vname + ".vrt")
-    listPath = os.path.join(tempTileDir, "fileList.txt")
-    listFile = open(listPath, "w")
-    nname, ext = os.path.splitext(origFile)
-    #Here we assume tif files are 8 bit and ntf are 16 bit
-    if ext.lower() == '.tif':
-        bitSize = 8
-    else:
-        bitSize = 16
-    for detect in detects:
-        rectStr = detect[0]
-        imgName = detect[1]
-        basename = os.path.basename(imgName)
-        x, y, w, h = parseRectStr(rectStr)
-        print("detect = {0},{1},{2},{3}".format(x, y,w , h))
-        tName = basename + "_" + str(x) + "_" + str(y) + "_" + \
-            str(w) + "_" + str(h) + ".tif"
-        t2Name = basename + "_" + str(x) + "_" + str(y) + "_" + \
-            str(w) + "_" + str(h) + "_w" + ".tif"
-        tPath = os.path.join(tempTileDir, tName)
-        t2Path = os.path.join(tempTileDir, t2Name)
-        if os.path.exists(tPath) == True:
-            os.remove(tPath)
-        if os.path.exists(t2Path) == True:
-            os.remove(t2Path)
-        # Git the image clip
-        if bitSize == 16:
-            transStr = "/home/trbatcha/tools/bin/gdal_translate -of GTiff " +\
-             "-ot Byte -scale 64 1024 0 255 -b 1 -srcwin " \
-             + str(x) + " " +  str(y) + " " + str(w) + " " + str(h) + " " \
-             + imgName + " " + tPath
-        else:
-            transStr = "/home/trbatcha/tools/bin/gdal_translate -of GTiff " +\
-             "-ot Byte -b 1 -srcwin " \
-             + str(x) + " " +  str(y) + " " + str(w) + " " + str(h) + " " \
-             + imgName + " " + tPath
-        args = shlex.split(transStr)
-        print("running translate")
-        p = Popen(args, stdout=PIPE, stderr=PIPE)
-        stdout, stderr = p.communicate()
-        print stderr
-        print("translate complete")
-        #get rid of xml file gdal_translate creates
-        xmlfile = tPath + ".aux.xml"
-        if os.path.exists(xmlfile):
-            os.remove(tPath + ".aux.xml")
-        print (stdout)
-        warpStr = "/home/trbatcha/tools/bin/gdalwarp -of GTiff -t_srs " + \
-                  "EPSG:3857  -overwrite "  + tPath + " " + t2Path
-        args = shlex.split(warpStr)
-        print("running warp")
-        p = Popen(args, stdout=PIPE, stderr=PIPE)
-        stdout, stderr = p.communicate()
-        print (stderr)
-        print (stdout)
-        print("warp complete")
-        listFile.write(t2Path + '\n')
-
-    listFile.close()
-    vrtStr = "/home/trbatcha/tools/bin/gdalbuildvrt -srcnodata 0 -addalpha " \
-             + "-vrtnodata 0 -overwrite -input_file_list " + listPath + \
-             " " + vPath
-    args = shlex.split(vrtStr)
-    print("running vrt")
-    p = Popen(args, stdout=PIPE, stderr=PIPE)
-    stdout, stderr = p.communicate()
-    print (stderr)
-    print (stdout)
-    print("virt complete")
-    
-    # Generate tiles for all the image chips
-    import gdal2tiles
-    tileStr = "-v -p mercator --zoom 13 -w none " + vPath + " " + outputDir
-    #debug tried gdal2tiles as seperate process, it did not fix my problem so commented out
-    #my_env = os.environ.copy()
-    #tileStr = "/home/trbatcha/tools/bin/python gdal2tiles.py -v -p mercator -z 13 -w none " + vPath + " " + outputDir
-    args = shlex.split(tileStr)
-    #p = Popen(args, env=my_env, stdout=PIPE, stderr=PIPE)
-    #stdout, stderr = p.communicate()
-    #print (stderr)
-    #print (stdout)
-
-    print("gen tiles")
-
-    tileGenFailed = False
-    with timeout(10):
-        try:
-            # By default gdal turns exceptions off
-            gdal.UseExceptions()
-            targs = gdal.GeneralCmdLineProcessor(args)
-            gtiles = gdal2tiles.GDAL2Tiles(targs)
-            gtiles.process()
-        except Exception, err:
-            if err.errno != errno.EINTR:
-                print("gdal2tiles FAILED!!!")
-                print(err)
-                sys.stdout.flush()
-                shutil.rmtree(tempTileDir, ignore_errors=True)
-                return
-            print("TileGeneration TIMED OUT!! for file " + origFile) 
-            tileGenFailed = True
-
-    print("gen tiles complete")
-    # before we move tiles lets check lockfile and wait if not avail
-    if tileGenFailed == False:
-        with timeout(3):
-            lockFile = os.path.join(tileDir,"tileLock")
-            lock = open(lockFile, 'w')
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-            except IOError, e:
-                if e.errno != errno.EINTR:
-                    raise e
-                print("Tile filelock timeout")
-                lock.close()
-                shutil.rmtree(tempTileDir, ignore_errors=True)
-                return
-        moveTiles(outputDir, tileDir)
-        fcntl.flock(lock, fcntl.LOCK_UN)
-        lock.close()
-     
-    # remove the non-tiles we created
-    shutil.rmtree(tempTileDir, ignore_errors=True)
-
-
 
 
 if __name__ == '__main__':
@@ -514,12 +319,13 @@ if __name__ == '__main__':
     if args.split_size != None:
         fileList = split_up_file(ifile, tempDir, args.split_size, -1)
         ##debug only do the first one
-        #fileList = split_up_file(ifile, tempDir, args.split_size, 90)
+        #fileList = split_up_file(ifile, tempDir, args.split_size, 200)
     else:
         fileList = [ifile]
 
 
     if doDetect == True:
+        # debug
         net = caffe.Net(prototxt, caffemodel, caffe.TEST)
         print '\n\nLoaded network {:s}'.format(caffemodel)
         # Warmup on a dummy image
@@ -539,40 +345,6 @@ if __name__ == '__main__':
                     detects.append((d, ifile))
             else:
                 pass
-                #For testing
-            #    print("appending dummp detection")
-            #    detects.append(("ship 0.0 0.0 300.0 300.0", ifile))
-            #    dset = gdal.Open(ifile)
-            #    dxsize = 300
-            #    dysize = 300
-            #    width = dset.RasterXSize
-            #    height = dset.RasterYSize
-            #    cx = width /2
-            #    cy = height /2
-            #    if height < dysize:
-            #        dysize = height
-            #    if width < dxsize:
-            #        dxsize = width
-            #    if dxsize <= 0 or dysize <= 0:
-            #        continue
-            #    if cx + dxsize >= width or cy + dysize >= height:
-            #        detects.append(("ship {0} {1} {2} {3}".format( cx, cy, width - cx -1, height - cy -1), ifile)) 
-            #    else:
-            #        detects.append(("ship {0} {1} {2} {3}".format( cx, cy, dxsize -1, dysize -1), ifile)) 
-                
-                #detects.append(
-                #   ("ship 0.0 0.0 {0} {1}".format(dxsize, dysize), ifile))
-               
-                #detects.append(("ship {0} {1} {2} {3}".format(
-                #          width - dxsize-10, height - dysize-10, dxsize, dysize),
-                #          ifile))
-                #detects.append(("ship {0} {1} {2} {3}".format(
-                #              width - dxsize, 0.0, dxsize, dysize), 
-                #              ifile))
-                #detects.append(("ship {0} {1} {2} {3}".format(
-                #              0.0, height - dysize, dxsize, dysize), 
-                #              ifile))
-
 
 
     #debug show all detects
@@ -580,8 +352,7 @@ if __name__ == '__main__':
     for d in detects:
         print(d[0])
 
-    writeTilesFromDetects(tiledir, detects, ifile)
-    #shutil.rmtree(tempDir)
+    shutil.rmtree(tempDir)
 
     #debug profiling
     #profile.disable()

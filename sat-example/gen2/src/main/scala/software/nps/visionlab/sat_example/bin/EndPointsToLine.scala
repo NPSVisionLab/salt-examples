@@ -25,8 +25,10 @@ package software.nps.visionlab.sat_example.bin
  *
  */
 class EndPointsToLine(
-  val maxLenThresh: Int = 256*4,
-  val minLenThresh: Int = 16,
+  //val maxLenThresh: Int = 256*4,
+  val maxLenThresh: Int = 256*16,
+  //val minLenThresh: Int = 16,
+  val minLenThresh: Int = 2,
   val xBins: Int = 256,
   val yBins: Int = 256
 ) extends Serializable {
@@ -52,6 +54,9 @@ class EndPointsToLine(
    */
   def endpointsToLineBins(start: (Int, Int), end: (Int, Int)): IndexedSeq[(Int, Int)] = {
     val len = calcLen(start, end)
+
+    //debug
+    println("line length " + len)
 
     if (len > maxLenThresh) {
       IndexedSeq[(Int, Int)]()
@@ -83,6 +88,8 @@ class EndPointsToLine(
       val ystep = if (y0 < y1) 1 else -1
 
       // x1+1 needed here so that "end" bin is included in Sequence
+      //debug
+      println("line cal " + x0 + " to " + String.valueOf(x1+1))
       Range(x0, x1+1).map(x =>
         {
           val ourY = y

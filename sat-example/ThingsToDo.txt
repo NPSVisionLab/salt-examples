@@ -1,0 +1,5 @@
+Things that still don't work:
+
+1.  If the satellite image does not have a valid Spatial Reference then the detection points don't get translated to lat longs and are not displayed.  So need a way to create a transform based upon the GCP's.  The image must have GCP's since it would have been kicked out without a Spatial Reference.  There must be a way to build a transform from the GCP's since we have all the information we need.
+
+2.  Clean up and remove comments and look for optimizations.

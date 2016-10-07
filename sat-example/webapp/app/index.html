@@ -27,7 +27,7 @@
       zoomControl: true,
       center: [40.7, -73.9],
       zoom: 4,
-      maxZoom: 13,
+      maxZoom: 16,
     });
 
     // Base map
@@ -94,8 +94,8 @@
       // Draw the image layer
       var itiles = './tiles/iData/{z}/{x}/{y}.png';
       var ilayer = L.tileLayer(itiles, {
-          minZoom: 10,
-          maxZoom: 13,
+          minZoom: 13,
+          maxZoom: 16,
           attribution: "EasyCV",
           tms: true,
           noWrap: true,

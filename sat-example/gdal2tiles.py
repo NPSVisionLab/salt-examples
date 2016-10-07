@@ -1163,9 +1163,11 @@ gdal2tiles temp.vrt""" % self.input )
         print("Generating Base Tiles:")
 
         if self.options.verbose:
-            #mx, my = self.out_gt[0], self.out_gt[3] # OriginX, OriginY
-            #px, py = self.mercator.MetersToPixels( mx, my, self.tmaxz)
-            #print "Pixel coordinates:", px, py, (mx, my)
+            #debug
+            mx, my = self.out_gt[0], self.out_gt[3] # OriginX, OriginY
+            px, py = self.mercator.MetersToPixels( mx, my, self.tmaxz)
+            print ("Pixel coordinates:", px, py, (mx, my))
+            #debug
             print('')
             print("Tiles generated from the max zoom level:")
             print("----------------------------------------")
@@ -1189,15 +1191,16 @@ gdal2tiles temp.vrt""" % self.input )
             print("dataBandsCount: ", self.dataBandsCount)
             print("tilebands: ", tilebands)
 
-        #print tminx, tminy, tmaxx, tmaxy
+
         tcount = (1+abs(tmaxx-tminx)) * (1+abs(tmaxy-tminy))
-        #print tcount
+
         ti = 0
 
         tz = self.tmaxz
         yrange = range(tmaxy, tminy-1, -1)
         if self.options.leaflet:
             yrange = range(tminy, tmaxy+1)
+
 
         for ty in yrange:
             for tx in range(tminx, tmaxx+1):
@@ -1218,7 +1221,10 @@ gdal2tiles temp.vrt""" % self.input )
 
                 # Create directories for the tile
                 if not os.path.exists(os.path.dirname(tilefilename)):
+                    #debug
+                    print("making tile directory " + os.path.dirname(tilefilename))
                     os.makedirs(os.path.dirname(tilefilename))
+
 
                 if self.options.profile == 'mercator':
                     # Tile bounds in EPSG:900913
@@ -1226,7 +1232,6 @@ gdal2tiles temp.vrt""" % self.input )
                 elif self.options.profile == 'geodetic':
                     b = self.geodetic.TileBounds(tx, ty, tz)
 
-                #print "\tgdalwarp -ts 256 256 -te %s %s %s %s %s %s_%s_%s.tif" % ( b[0], b[1], b[2], b[3], "tiles.vrt", tz, tx, ty)
 
                 # Don't scale up by nearest neighbour, better change the querysize
                 # to the native resolution (and return smaller query tile) for scaling
@@ -1238,6 +1243,7 @@ gdal2tiles temp.vrt""" % self.input )
                         print("\tNative Extent (querysize",nativesize,"): ", rb, wb)
 
                     # Tile bounds in raster coordinates for ReadRaster query
+                    # !!!For some unknown reason this hangs after 544 images
                     rb, wb = self.geo_query( ds, b[0], b[3], b[2], b[1], querysize=querysize)
 
                     rx, ry, rxsize, rysize = rb
@@ -1295,10 +1301,12 @@ gdal2tiles temp.vrt""" % self.input )
                     # TODO: Use directly 'near' for WaveLet files
                 else:
                     # Big ReadRaster query in memory scaled to the tilesize - all but 'near' algo
+
                     dsquery = self.mem_drv.Create('', querysize, querysize, tilebands)
                     # TODO: fill the null value in case a tile without alpha is produced (now only png tiles are supported)
                     #for i in range(1, tilebands+1):
                     #   dsquery.GetRasterBand(1).Fill(tilenodata)
+
                     dsquery.WriteRaster(wx, wy, wxsize, wysize, data, band_list=list(range(1,self.dataBandsCount+1)))
                     dsquery.WriteRaster(wx, wy, wxsize, wysize, alpha, band_list=[tilebands])
 
@@ -1306,15 +1314,21 @@ gdal2tiles temp.vrt""" % self.input )
                     del dsquery
 
                 del data
+                del alpha
 
                 if self.options.resampling != 'antialias':
                     # Write a copy of tile to png/jpg
+                    #debug
+                    print("Writing out tile file " + tilefilename)
+
                     self.out_drv.CreateCopy(tilefilename, dstile, strict=0)
 
                 del dstile
 
                 # Create a KML file for this tile.
                 if self.kml:
+                    #debug
+                    print("kml option")
                     kmlfilename = os.path.join(self.output, str(tz), str(tx), '%d.kml' % ty)
                     if not self.options.resume or not os.path.exists(kmlfilename):
                         f = open( kmlfilename, 'w')
@@ -1445,15 +1459,21 @@ gdal2tiles temp.vrt""" % self.input )
         ry= int((uly - geotran[3]) / geotran[5] + 0.001)
         rxsize= int((lrx - ulx) / geotran[1] + 0.5)
         rysize= int((lry - uly) / geotran[5] + 0.5)
+        print("rxsize {0}, rysize{1}".format(rxsize, rysize))
+        sys.stdout.flush()
 
         if not querysize:
             wxsize, wysize = rxsize, rysize
         else:
+            print("geo_query querysize={0}".format(querysize))
+            sys.stdout.flush()
             wxsize, wysize = querysize, querysize
 
         # Coordinates should not go out of the bounds of the raster
         wx = 0
         if rx < 0:
+            print("rx < 0")
+            sys.stdout.flush()
             rxshift = abs(rx)
             wx = int( wxsize * (float(rxshift) / rxsize) )
             wxsize = wxsize - wx
@@ -1462,6 +1482,9 @@ gdal2tiles temp.vrt""" % self.input )
         if rx+rxsize > ds.RasterXSize:
             wxsize = int( wxsize * (float(ds.RasterXSize - rx) / rxsize) )
             rxsize = ds.RasterXSize - rx
+            print("rx + rxsize > ds.RasterXSize" )
+            print("wxsize {0}, rxsize {1} rysize {2}".format(wxsize, rxsize,rysize))
+            sys.stdout.flush()
 
         wy = 0
         if ry < 0:
@@ -1474,6 +1497,8 @@ gdal2tiles temp.vrt""" % self.input )
             wysize = int( wysize * (float(ds.RasterYSize - ry) / rysize) )
             rysize = ds.RasterYSize - ry
 
+        print("returning geo_query")
+        sys.stdout.flush()
         return (rx, ry, rxsize, rysize), (wx, wy, wxsize, wysize)
 
     # -------------------------------------------------------------------------

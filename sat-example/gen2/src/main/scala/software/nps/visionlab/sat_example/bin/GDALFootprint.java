@@ -44,11 +44,20 @@ import java.util.Vector;
 import java.util.ArrayList;
 import java.util.Properties;
 import java.util.StringTokenizer;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 import java.lang.IllegalArgumentException;
 import java.lang.RuntimeException;
 import java.lang.Process;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.exec.LogOutputStream;
+import org.apache.commons.exec.DefaultExecutor;
+import org.apache.commons.exec.CommandLine;
+import org.apache.commons.exec.PumpStreamHandler;
+import org.apache.commons.exec.ExecuteException;
+import org.apache.commons.exec.environment.EnvironmentUtils;
 
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
@@ -91,12 +100,25 @@ public class GDALFootprint
 
     public static class DetectionResult {
         public String objName;
+        public java.awt.geom.Point2D pix;
         public Double width;
         public Double height;
         public java.awt.geom.Point2D p0;
         public java.awt.geom.Point2D p1;
         public java.awt.geom.Point2D p2;
         public java.awt.geom.Point2D p3;
+    }
+
+    public class CollectOutputStream extends LogOutputStream {
+        private final List<String> lines = new LinkedList<String>();
+        
+        @Override
+        protected void processLine(String line, int level){
+            lines.add(line);
+        }
+        public List<String> getLines() {
+            return lines;
+        }
     }
 
     public static java.awt.geom.Point2D[] computeCornersFromGeotransform(
@@ -381,39 +403,52 @@ public class GDALFootprint
         }
         if (new File("/home/trbatcha/work/py-faster-rcnn").exists())
             System.out.println("py-faster-rcnn exists");
-        ArrayList<String> args = new ArrayList<String>();
-        args.add("/home/trbatcha/tools/bin/python");
-        args.add(detectorScript);
-        args.add("--split");
-        args.add("600");
-        args.add("--cpu");
-        args.add("--model");
-        args.add(modelfile);
-        args.add("--proto");
-        args.add(prototxt);
-        args.add("--cfg");
-        args.add(cfg);
-        args.add("--tiles");
-        args.add(imageLayerPath.getAbsolutePath());
-        args.add(_fileName);
-        ProcessBuilder pb = new ProcessBuilder(args);
-        pb.environment().put("LD_LIBRARY_PATH",
+        
+        CommandLine args = CommandLine.parse("/home/trbatcha/tools/bin/python");
+        args.addArgument(detectorScript);
+        args.addArgument("--split");
+        args.addArgument("600");
+        args.addArgument("--cpu");
+        args.addArgument("--model");
+        args.addArgument(modelfile);
+        args.addArgument("--proto");
+        args.addArgument(prototxt);
+        args.addArgument("--cfg");
+        args.addArgument(cfg);
+        args.addArgument("--tiles");
+        args.addArgument(imageLayerPath.getAbsolutePath());
+        args.addArgument(_fileName);
+
+        Map<String, String> env = EnvironmentUtils.getProcEnvironment();
+        env.put("LD_LIBRARY_PATH",
         "/usr/lib:/usr/lib64:/usr/lib64/atlas:/home/trbatcha/tools/lib:/home/trbatcha/tools/usr/lib64:/home/trbatcha/tools/usr/lib64/atlas:/home/trbatcha/tools/usr/lib:/home/trbatcha/gflags-2.1.1/build/lib:/home/trbatcha/liblmdb:/home/trbatcha/leveldb-master:/home/trbatcha/usr/lib:/home/trbatcha/tools/opencv/lib:/usr/lib64:/home/trbatcha/work/py-faster-rcnn/caffe-fast-rcnn/.build_release/lib");
-        pb.environment().put("PYTHONPATH", sparkDir + ":$PYTHONPATH");
+        env.put("PYTHONPATH", sparkDir + ":$PYTHONPATH");
         Path eggTempDir = Files.createTempDirectory(sparkDir);
-        pb.environment().put("PYTHON_EGG_CACHE", eggTempDir.toString());
-        pb.environment().put("GDAL_DATA", "/home/trbatcha/gdal_data");
-        //pb.redirectErrorStream(true);
+        env.put("PYTHON_EGG_CACHE", eggTempDir.toString());
+        env.put("GDAL_DATA", "/home/trbatcha/gdal_data");
 
-        //Process process = pb.inheritIO().start();
-        Process process = pb.start();
-        int errCode = process.waitFor();
-        FileUtils.deleteDirectory(new File(eggTempDir.toString()));
 
-        System.out.println("Detection Complete");
-        BufferedReader br = new BufferedReader(new InputStreamReader(process.getErrorStream()));
-        String line = null;
-        while ((line = br.readLine()) != null) {
+        System.out.println("Calling doDetect");
+
+        CollectOutputStream stdOutData = new CollectOutputStream();
+        CollectOutputStream stdErrData = new CollectOutputStream();
+        PumpStreamHandler pump = new PumpStreamHandler(stdOutData, stdErrData);
+        DefaultExecutor executor = new DefaultExecutor();
+        executor.setStreamHandler(pump);
+        int errCode = 1;
+        try {
+            errCode = executor.execute(args, env);
+            System.out.println("doDetect Complete");
+        }catch (ExecuteException e) {
+            System.err.println("Execute Exception " + e.getMessage());
+        }catch (IOException e) {
+            System.err.println("IO Exception " + e.getMessage());
+        }finally {
+            FileUtils.deleteDirectory(new File(eggTempDir.toString()));
+        }
+
+        List<String> lines = stdErrData.getLines();
+        for (String line : lines) {
             System.out.println("syserr: " +line);
         }
         if (errCode != 0) {
@@ -423,20 +458,19 @@ public class GDALFootprint
         }
         try {
             System.out.println("Reading input stream");
-            br = new BufferedReader(new InputStreamReader(
-                                 process.getInputStream()));
             // Input steam should be objname  x y w h
             // The x,y,w,h are in image pixel coordinates we
             // need to convert to lat lon
             String objName;
-            while ((line = br.readLine()) != null) {
+            lines = stdOutData.getLines();
+            for (String line : lines) {
                 System.out.println("reading next line from input stream");
                 System.out.println(line);
                 StringTokenizer tok = new StringTokenizer(line);
                 DetectionResult dres = new DetectionResult();
                 dres.objName = (String)tok.nextElement();
                 System.out.println("objname " + dres.objName);
-                dres.p0 = new Point2D.Double(
+                dres.pix = new Point2D.Double(
                                   Double.valueOf((String)tok.nextElement()),
                                   Double.valueOf((String)tok.nextElement()));
                 dres.width = Double.valueOf((String)tok.nextElement());
@@ -448,9 +482,7 @@ public class GDALFootprint
             System.err.println("Parsing detection return exception caught.");
             System.err.println(e.getMessage());
 
-        } finally {
-            br.close();
-        }
+        } 
         // Now convert the points to lan lon
         int i;
         SpatialReference srs;
@@ -463,8 +495,8 @@ public class GDALFootprint
         _poDataset.GetGeoTransform(gt);
         for (i = 0; i < res.size(); i++) {
             java.awt.geom.Point2D[] corners = 
-              computeCornersFromGeotransform(gt, (int)res.get(i).p0.getX(),
-               (int)res.get(i).p0.getY(), 
+              computeCornersFromGeotransform(gt, (int)res.get(i).pix.getX(),
+               (int)res.get(i).pix.getY(), 
                (int)Math.round(res.get(i).width), 
                (int)Math.round(res.get(i).height));
             java.awt.geom.Point2D[] bbox = calcBoundingSector(srs, corners);
@@ -488,6 +520,73 @@ public class GDALFootprint
         if (res.size() > 0)
             System.out.println(String.valueOf(res.get(0).p0.getX()));
         return res;
+    }
+
+
+    public void getTiles(
+                          String tileScript,
+                          String detectString,
+                          File imageLayerPath) throws
+                          InterruptedException, IOException{
+        File tileFile = new File(tileScript);
+        String sparkDir = tileFile.getParent();
+        System.out.println("script " + tileScript);
+        System.out.println("spark dir " + sparkDir);
+        System.out.println("detect string: " + detectString);
+        if (new File(tileScript).exists() == false){
+            System.out.println("Tile script " + tileScript + " does not exist!!!");
+            return;
+        }
+        if (new File("/home/trbatcha/tools/bin/python").exists() == false){
+            System.out.println("/home/trbatcha/bin/python does not exist!!!");
+            return;
+        }
+        CommandLine args = CommandLine.parse("/home/trbatcha/tools/bin/python");
+        args.addArgument(tileScript);
+        args.addArgument(detectString);
+        args.addArgument("--tiles");
+        args.addArgument(imageLayerPath.getAbsolutePath());
+
+        Map<String, String> env = EnvironmentUtils.getProcEnvironment();
+        env.put("LD_LIBRARY_PATH",
+        "/usr/lib:/usr/lib64:/usr/lib64/atlas:/home/trbatcha/tools/lib:/home/trbatcha/tools/usr/lib64:/home/trbatcha/tools/usr/lib64/atlas:/home/trbatcha/tools/usr/lib:/home/trbatcha/gflags-2.1.1/build/lib:/home/trbatcha/liblmdb:/home/trbatcha/leveldb-master:/home/trbatcha/usr/lib:/home/trbatcha/tools/opencv/lib:/usr/lib64:/home/trbatcha/work/py-faster-rcnn/caffe-fast-rcnn/.build_release/lib");
+        env.put("PYTHONPATH", sparkDir + ":$PYTHONPATH");
+        Path eggTempDir = Files.createTempDirectory(sparkDir);
+        env.put("PYTHON_EGG_CACHE", eggTempDir.toString());
+        env.put("GDAL_DATA", "/home/trbatcha/gdal_data");
+
+        CollectOutputStream stdOutData = new CollectOutputStream();
+        CollectOutputStream stdErrData = new CollectOutputStream();
+        PumpStreamHandler pump = new PumpStreamHandler(stdOutData, stdErrData);
+        DefaultExecutor executor = new DefaultExecutor();
+        executor.setStreamHandler(pump);
+        int errCode = 1;
+        try {
+            System.out.println("Calling doTiles");
+            errCode = executor.execute(args, env);
+            System.out.println("doTiles complete");
+        }catch (ExecuteException e) {
+            System.err.println("Execute Exception " + e.getMessage());
+        }catch (IOException e) {
+            System.err.println("IO Exception " + e.getMessage());
+        }finally {
+            FileUtils.deleteDirectory(new File(eggTempDir.toString()));
+        }
+
+        List<String> lines = stdErrData.getLines();
+        for (String line : lines) {
+            System.out.println("syserr: " +line); 
+        }
+        lines = stdOutData.getLines();
+        for (String line : lines) {
+            System.out.println("sysout: " +line); 
+        }
+
+        if (errCode != 0) {
+            System.out.println("Could not execute tile gen script!!");
+            System.out.println("Error code: " + String.valueOf(errCode));
+            return;
+        }
     }
 
     /** @param args  */
